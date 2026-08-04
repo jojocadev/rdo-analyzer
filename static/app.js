@@ -252,119 +252,33 @@ function updateProgressUI(data) {
 }
 
 async function startAllSuppliersSequential() {
-    const select = document.getElementById('supplierSelect');
-    const allSuppliers = Array.from(select.options)
-        .filter(o => o.value !== '')
-        .map(o => o.value);
-
-    if (allSuppliers.length === 0) {
-        alert('Aguarde o carregamento da lista de fornecedores.');
-        return;
-    }
-
     const confirmed = confirm(
-        `Isso vai analisar ${allSuppliers.length} fornecedores em sequência, um de cada vez.\n\n` +
-        `O processo pode demorar bastante dependendo da quantidade de PDFs.\n\n` +
-        `Deseja continuar?`
+        "Isso vai analisar TODOS os fornecedores da base em segundo plano direto no servidor.\n\n" +
+        "Você poderá fechar o navegador ou recarregar a página a qualquer momento que o processo continuará rodando.\n\n" +
+        "Deseja iniciar?"
     );
     if (!confirmed) return;
 
-    // Desabilita botões durante o processo
-    document.getElementById('btnAnalyzeSupplier').disabled = true;
-    document.getElementById('btnAnalyzeAll').disabled = true;
-
     showProgressCard();
-    if (statusInterval) clearInterval(statusInterval);
 
-    let accumulated = {
-        pairs: [],
-        totalSchools: 0,
-        totalImages: 0,
-        affectedIneps: new Map()  // inep -> info
-    };
+    try {
+        const response = await fetch('/api/scan-all-suppliers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
 
-    for (let i = 0; i < allSuppliers.length; i++) {
-        const supplier = allSuppliers[i];
-        const overallPct = Math.round((i / allSuppliers.length) * 100);
-
-        // Atualiza label de progresso geral
-        document.getElementById('progressPct').innerText = `${overallPct}%`;
-        document.getElementById('progressBarFill').style.width = `${overallPct}%`;
-        document.getElementById('currentFileText').innerText =
-            `Fornecedor ${i + 1}/${allSuppliers.length}: ${supplier}`;
-        document.getElementById('statFiles').innerText = `${i}/${allSuppliers.length} fornecedores`;
-
-        try {
-            // Inicia análise do fornecedor
-            const resp = await fetch('/api/scan-supabase-supplier', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fornecedor: supplier, limit: 5000 })
-            });
-            if (!resp.ok) continue;
-
-            // Aguarda conclusão via polling
-            await new Promise((resolve) => {
-                const poll = setInterval(async () => {
-                    try {
-                        const sRes = await fetch('/api/status');
-                        const sData = await sRes.json();
-                        // Atualiza sub-progresso dentro do fornecedor
-                        document.getElementById('statImages').innerText = sData.total_images || 0;
-                        document.getElementById('statTime').innerText = `${sData.elapsed_time || 0}s`;
-                        if (sData.status === 'completed' || sData.status === 'error') {
-                            clearInterval(poll);
-                            resolve();
-                        }
-                    } catch { clearInterval(poll); resolve(); }
-                }, 1500);
-            });
-
-            // Coleta resultados do fornecedor
-            const rRes = await fetch('/api/results');
-            if (rRes.ok) {
-                const rData = await rRes.json();
-                accumulated.pairs.push(...(rData.duplicate_pairs || []));
-                accumulated.totalSchools += rData.total_schools_analyzed || 0;
-                accumulated.totalImages += rData.total_images || 0;
-                (rData.affected_ineps || []).forEach(item => {
-                    const key = String(item.inep || item.filename || item);
-                    if (!accumulated.affectedIneps.has(key)) {
-                        accumulated.affectedIneps.set(key, item);
-                    }
-                });
-            }
-        } catch (err) {
-            console.error(`Erro ao processar ${supplier}:`, err);
+        const data = await response.json();
+        if (response.ok) {
+            startPollingStatus();
+        } else {
+            alert(data.error || "Erro ao iniciar análise de todos os fornecedores.");
+            hideProgressCard();
         }
+    } catch (err) {
+        console.error(err);
+        alert("Erro de conexão ao iniciar análise.");
+        hideProgressCard();
     }
-
-    // Reabilita botões
-    document.getElementById('btnAnalyzeSupplier').disabled = false;
-    document.getElementById('btnAnalyzeAll').disabled = false;
-
-    // Monta resultado unificado
-    const pairs = accumulated.pairs;
-    const affectedList = Array.from(accumulated.affectedIneps.values());
-    const mergedResults = {
-        total_schools_analyzed: accumulated.totalSchools,
-        total_images: accumulated.totalImages,
-        total_duplicate_pairs: pairs.length,
-        exact_duplicate_pairs: pairs.filter(p => p.similarity === 100).length,
-        visual_duplicate_pairs: pairs.filter(p => p.similarity < 100).length,
-        affected_ineps_count: affectedList.length,
-        affected_ineps: affectedList,
-        duplicate_pairs: pairs
-    };
-
-    displayResults(mergedResults);
-
-    // Override nome no banner
-    document.getElementById('supplierAnalyzedName').textContent = `Todos os Fornecedores (${allSuppliers.length})`;
-    document.getElementById('supplierSummaryText').textContent =
-        pairs.length > 0
-            ? `${pairs.length} pares de imagens duplicadas entre INEPs diferentes encontrados em ${affectedList.length} escolas.`
-            : 'Nenhuma imagem duplicada entre INEPs diferentes encontrada na base completa.';
 }
 
 
