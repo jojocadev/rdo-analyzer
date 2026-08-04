@@ -5,7 +5,23 @@ document.addEventListener('DOMContentLoaded', () => {
     setupDropzone();
     setupFileInput();
     loadSuppliers();
+    checkInitialStatus();
 });
+
+async function checkInitialStatus() {
+    try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.status === 'processing') {
+            showProgressCard();
+            startPollingStatus();
+        } else if (data.status === 'completed' && data.results) {
+            displayResults(data.results);
+        }
+    } catch (e) {
+        console.error("Erro ao verificar status inicial:", e);
+    }
+}
 
 async function loadSuppliers() {
     try {
