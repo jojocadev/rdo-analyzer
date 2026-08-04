@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDO Image Analyzer - Detecção de Imagens Duplicadas em PDFs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-images"></i>
+                </div>
+                <div>
+                    <h1>RDO <span>Image Analyzer</span></h1>
+                    <p class="subtitle">Detecção Inteligente de Imagens Duplicadas em Lotes de PDFs</p>
+                </div>
+            </div>
+            <div class="status-badge" id="systemStatus">
+                <span class="dot green"></span> Sistema Pronto
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Input Section -->
+            <section class="card input-card">
+                <div class="tabs-header">
+                    <button class="tab-btn active" id="tabSupabaseBtn" onclick="switchTab('supabase')">
+                        <i class="fa-solid fa-database"></i> Análise por Fornecedor (Supabase)
+                    </button>
+                    <button class="tab-btn" id="tabUploadBtn" onclick="switchTab('upload')">
+                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload de PDFs
+                    </button>
+                    <button class="tab-btn" id="tabScanBtn" onclick="switchTab('scan')">
+                        <i class="fa-solid fa-folder-open"></i> Varredura de Pasta Local
+                    </button>
+                </div>
+
+                <!-- Tab Supabase -->
+                <div class="tab-content active" id="tabSupabase">
+                    <div class="folder-scan-form">
+                        <label for="supplierSelect">Selecione o Fornecedor para Verificar Duplicatas:</label>
+                        <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
+                            <i class="fa-solid fa-building input-icon"></i>
+                            <select id="supplierSelect" style="flex:1; min-width:260px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;">
+                                <option value="">Carregando fornecedores...</option>
+                            </select>
+                            <button class="btn btn-primary" id="btnAnalyzeSupplier" onclick="startSupabaseSupplierScan()">
+                                <i class="fa-solid fa-magnifying-glass"></i> Analisar Fornecedor
+                            </button>
+                            <button class="btn btn-success" id="btnAnalyzeAll" onclick="startAllSuppliersSequential()" style="background: linear-gradient(135deg, #7c3aed, #4f46e5); border-color: #7c3aed;">
+                                <i class="fa-solid fa-layer-group"></i> Analisar Todos os Fornecedores
+                            </button>
+                        </div>
+                        <p class="help-text">
+                            <i class="fa-solid fa-circle-info"></i>
+                            Selecione um fornecedor e clique em <strong>Analisar Fornecedor</strong> para análise individual.
+                            Ou clique em <strong>Analisar Todos os Fornecedores</strong> para processar todos em sequência e ver o resultado unificado.
+                        </p>
+                        <div style="margin-top:0.8rem; padding: 0.8rem 1rem; background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.3); border-radius: 8px; font-size: 0.85rem; color: #fbbf24;">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            <strong>Analisar todos os fornecedores</strong> processa cada um em sequência e pode levar <strong>várias horas</strong> dependendo da quantidade de PDFs. Mantenha a janela aberta.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Upload -->
+                <div class="tab-content active" id="tabUpload">
+                    <div class="dropzone" id="dropzone">
+                        <i class="fa-solid fa-file-pdf drop-icon"></i>
+                        <h3>Arraste seus arquivos PDF aqui</h3>
+                        <p>ou selecione arquivos/pasta do seu computador (Suporta milhares de PDFs)</p>
+                        <input type="file" id="fileInput" multiple accept=".pdf" style="display: none;">
+                        <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                            <i class="fa-solid fa-plus"></i> Selecionar PDFs
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab Scan Local Folder -->
+                <div class="tab-content" id="tabScan">
+                    <div class="folder-scan-form">
+                        <label for="folderPathInput">Caminho da Pasta no Computador:</label>
+                        <div class="input-group">
+                            <i class="fa-solid fa-hard-drive input-icon"></i>
+                            <input type="text" id="folderPathInput" placeholder="Exemplo: C:\Projetos AI\Sisop\Quest ou C:\MeusPDFs">
+                            <button class="btn btn-primary" onclick="startFolderScan()">
+                                <i class="fa-solid fa-magnifying-glass"></i> Iniciar Varredura Direta
+                            </button>
+                        </div>
+                        <p class="help-text">
+                            <i class="fa-solid fa-circle-info"></i> Processa diretamente os PDFs no disco sem precisar fazer upload via navegador.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Progress Section (Hidden by default) -->
+            <section class="card progress-card" id="progressCard" style="display: none;">
+                <div class="progress-header">
+                    <h3><i class="fa-solid fa-spinner fa-spin"></i> Processando Arquivos PDF...</h3>
+                    <span class="progress-percentage" id="progressPct">0%</span>
+                </div>
+                
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+                </div>
+
+                <div class="current-status-text" id="currentFileText">
+                    Iniciando análise de arquivos...
+                </div>
+
+                <div class="stats-grid-mini">
+                    <div class="mini-stat">
+                        <span class="label">Arquivos Processados</span>
+                        <span class="value" id="statFiles">0 / 0</span>
+                    </div>
+                    <div class="mini-stat">
+                        <span class="label">Imagens Extraídas</span>
+                        <span class="value" id="statImages">0</span>
+                    </div>
+                    <div class="mini-stat">
+                        <span class="label">Tempo Decorrido</span>
+                        <span class="value" id="statTime">0.0s</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Section (Hidden until completed) -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <!-- Summary Metrics -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon blue"><i class="fa-solid fa-file-pdf"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricTotalPDFs">0</span>
+                            <span class="metric-label">PDFs Analisados</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricAffectedFiles">0</span>
+                            <span class="metric-label">PDFs Afetados</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon blue"><i class="fa-solid fa-photo-film"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricTotalImages">0</span>
+                            <span class="metric-label">Total de Imagens</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon green"><i class="fa-solid fa-copy"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricDuplicatePairs">0</span>
+                            <span class="metric-label">Pares Duplicados</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon purple"><i class="fa-solid fa-equals"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricExactPairs">0</span>
+                            <span class="metric-label">Duplicatas Exatas</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon orange"><i class="fa-solid fa-eye"></i></div>
+                        <div>
+                            <span class="metric-value" id="metricVisualPairs">0</span>
+                            <span class="metric-label">Duplicatas Visuais</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Banner do Fornecedor Analisado -->
+                <div class="card supplier-group-card" id="supplierGroupSection" style="display: none;">
+                    <div class="supplier-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                        <div>
+                            <h3 style="margin:0;"><i class="fa-solid fa-building text-warning"></i> Análise Concluída: <span id="supplierAnalyzedName" style="color:var(--accent);">—</span></h3>
+                            <p class="subtitle" style="margin:0.3rem 0 0;">
+                                <span id="supplierSummaryText">Resultados abaixo na tabela.</span>
+                            </p>
+                        </div>
+                        <button class="btn btn-success" onclick="downloadExcelReport()" style="white-space:nowrap;">
+                            <i class="fa-solid fa-file-excel"></i> Baixar Relatório Excel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Lista de INEPs Afetados -->
+                <div class="card affected-files-card" id="affectedFilesCard" style="display: none;">
+                    <div class="affected-header">
+                        <h3><i class="fa-solid fa-triangle-exclamation text-warning"></i> INEPs com Duplicatas (<span id="affectedCountBadge">0</span>)</h3>
+                        <p class="subtitle">Lista dos INEPs onde foram encontradas imagens repetidas:</p>
+                    </div>
+                    <div class="affected-files-list" id="affectedFilesList">
+                        <!-- Preenchido dinamicamente via JS -->
+                    </div>
+                </div>
+
+                <!-- Controls & Export -->
+                <div class="card table-card">
+                    <div class="table-header-controls">
+                        <div>
+                            <h2><i class="fa-solid fa-list-check"></i> Relatório de Imagens Duplicadas</h2>
+                            <p class="subtitle">Abaixo estão listadas as imagens idênticas ou semelhantes encontradas em arquivos diferentes.</p>
+                        </div>
+                        <div class="actions-area">
+                            <button class="btn btn-success" onclick="downloadExcelReport()">
+                                <i class="fa-solid fa-file-excel"></i> Baixar Relatório em Excel (.xlsx)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Search & Filter bar -->
+                    <div class="filter-bar">
+                        <div class="search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="searchInput" placeholder="Filtrar por nome do PDF..." oninput="filterResults()">
+                        </div>
+                        <div class="filter-group">
+                            <label>Tipo:</label>
+                            <select id="typeFilter" onchange="filterResults()">
+                                <option value="all">Todos os Tipos</option>
+                                <option value="exact">Exatas (100%)</option>
+                                <option value="visual">Visuais (< 100%)</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Min. Similaridade:</label>
+                            <input type="range" id="simSlider" min="0" max="100" value="0" oninput="updateSimLabel(this.value); filterResults();">
+                            <span id="simLabel" class="badge">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Table -->
+                    <div class="table-responsive">
+                        <table class="data-table" id="resultsTable">
+                            <thead>
+                                <tr>
+                                    <th>Escola A (INEP)</th>
+                                    <th>Imagem A</th>
+                                    <th>Similaridade</th>
+                                    <th>Escola B (INEP)</th>
+                                    <th>Imagem B</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableBody">
+                                <!-- Preenchido dinamicamente via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Comparison Modal -->
+    <div class="modal-backdrop" id="compareModal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-code-compare"></i> Comparação Lado a Lado de Imagens</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="comparison-grid">
+                    <!-- Image A -->
+                    <div class="compare-item">
+                        <div class="compare-tag blue">Imagem Original (Arquivo A)</div>
+                        <div class="img-container">
+                            <img id="modalImgA" src="" alt="Imagem A">
+                        </div>
+                        <div class="compare-details">
+                            <p><strong>PDF:</strong> <span id="modalFileA"></span></p>
+                            <p><strong>Página:</strong> <span id="modalPageA"></span></p>
+                            <p><strong>Dimensões:</strong> <span id="modalDimA"></span></p>
+                        </div>
+                    </div>
+
+                    <!-- Center Badge -->
+                    <div class="compare-center">
+                        <div class="sim-circle" id="modalSimBadge">100%</div>
+                        <span class="sim-text" id="modalSimText">Duplicata Exata</span>
+                    </div>
+
+                    <!-- Image B -->
+                    <div class="compare-item">
+                        <div class="compare-tag orange">Imagem Duplicada (Arquivo B)</div>
+                        <div class="img-container">
+                            <img id="modalImgB" src="" alt="Imagem B">
+                        </div>
+                        <div class="compare-details">
+                            <p><strong>PDF:</strong> <span id="modalFileB"></span></p>
+                            <p><strong>Página:</strong> <span id="modalPageB"></span></p>
+                            <p><strong>Dimensões:</strong> <span id="modalDimB"></span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

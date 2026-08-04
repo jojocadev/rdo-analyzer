@@ -1,0 +1,19 @@
+# Python / Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Dados pesados e imagens baixadas (ficam no servidor/Supabase)
+extracted_images/
+uploads/
+reports/*.xlsx
+
+# Configurações do ambiente
+.env
