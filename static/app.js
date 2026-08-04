@@ -245,9 +245,18 @@ function hideProgressCard() {
 function updateProgressUI(data) {
     document.getElementById('progressPct').innerText = `${data.progress_pct}%`;
     document.getElementById('progressBarFill').style.width = `${data.progress_pct}%`;
-    document.getElementById('currentFileText').innerText = data.current_file ? `Processando: ${data.current_file}` : 'Preparando...';
-    document.getElementById('statFiles').innerText = `${data.processed_files} / ${data.total_files}`;
-    document.getElementById('statImages').innerText = data.total_images;
+    document.getElementById('currentFileText').innerText = data.current_file ? data.current_file : 'Preparando...';
+
+    const statLabel = document.getElementById('statFilesLabel');
+    if (data.total_files && data.current_file && data.current_file.includes('Fornecedor')) {
+        if (statLabel) statLabel.innerText = 'Fornecedores';
+        document.getElementById('statFiles').innerText = `${data.processed_files} / ${data.total_files}`;
+    } else {
+        if (statLabel) statLabel.innerText = 'Escolas';
+        document.getElementById('statFiles').innerText = `${data.processed_files} / ${data.total_files}`;
+    }
+
+    document.getElementById('statImages').innerText = data.total_images || 0;
     document.getElementById('statTime').innerText = `${data.elapsed_time || 0.0}s`;
 }
 
