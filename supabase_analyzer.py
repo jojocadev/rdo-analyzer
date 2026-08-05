@@ -179,26 +179,29 @@ class SupabaseRDOAnalyzer:
             sha_map[sha].append(img)
 
         exact_pairs = []
-        # Agrupamos primeiro por INEP para evitar comparações dentro do mesmo INEP
-        inep_seen: Dict[str, set] = {}  # sha -> set de INEPs que já têm essa imagem
+        seen_inep_pairs = set()
+
         for sha, img_list in sha_map.items():
             if len(img_list) > 1:
-                # Encontrar pares de imagens com INEPs DIFERENTES
+                # Encontrar pares de imagens com INEPs DIFERENTES (1 par por combinação de INEP A + INEP B + SHA)
                 for i in range(len(img_list)):
                     for j in range(i + 1, len(img_list)):
                         imgA = img_list[i]
                         imgB = img_list[j]
-                        # CRITÉRIO: só flagrar se INEPs forem diferentes
                         inep_a = imgA.get("inep")
                         inep_b = imgB.get("inep")
-                        if inep_a != inep_b:  # INEPs diferentes = foto reutilizada em outra escola!
-                            exact_pairs.append({
-                                "type": "Exata (100%)",
-                                "similarity": 100.0,
-                                "distance": 0,
-                                "imgA": imgA,
-                                "imgB": imgB
-                            })
+
+                        if inep_a and inep_b and inep_a != inep_b:
+                            pair_key = (min(str(inep_a), str(inep_b)), max(str(inep_a), str(inep_b)), sha)
+                            if pair_key not in seen_inep_pairs:
+                                seen_inep_pairs.add(pair_key)
+                                exact_pairs.append({
+                                    "type": "Exata (100%)",
+                                    "similarity": 100.0,
+                                    "distance": 0,
+                                    "imgA": imgA,
+                                    "imgB": imgB
+                                })
 
         # 2. Duplicatas Visuais (pHash)
         unique_sha_imgs = [img_list[0] for img_list in sha_map.values()]
