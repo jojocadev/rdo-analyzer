@@ -109,7 +109,15 @@ class SupabaseRDOAnalyzer:
 
                                 pil_img_rgb = pil_img.convert("RGB") if pil_img.mode not in ("RGB", "L") else pil_img
 
+                                # Ignorar imagens totalmente brancas/uniformes (templates em branco)
                                 sha256 = hashlib.sha256(image_bytes).hexdigest()
+                                if sha256 == "90cb2766e81912dd996d8387e2406a32e333836543dd88fc1845aa188e5bdce4":
+                                    continue
+
+                                extrema = pil_img_rgb.getextrema()
+                                if extrema and all(r[0] == r[1] for r in extrema):
+                                    continue  # Imagem de cor única 100% sólida/branca
+
                                 phash_val = str(imagehash.phash(pil_img_rgb))
 
                                 thumb_filename = f"{sha256[:16]}_{page_index+1}_{img_idx}.jpg"
