@@ -43,7 +43,18 @@ def index():
 
 @app.route("/extracted_images/<path:filename>")
 def serve_thumb(filename):
-    return send_from_directory(CACHE_DIR, filename)
+    file_path = os.path.join(CACHE_DIR, filename)
+    if os.path.exists(file_path):
+        return send_from_directory(CACHE_DIR, filename)
+    
+    # Busca flexível por SHA256 prefix
+    sha_prefix = filename.split("_")[0]
+    if sha_prefix:
+        matches = [f for f in os.listdir(CACHE_DIR) if f.startswith(sha_prefix)]
+        if matches:
+            return send_from_directory(CACHE_DIR, matches[0])
+            
+    return send_from_directory("static", "index.html"), 404
 
 def sanitize_json(obj):
     """Converte recursivamente numpy int64/float64 e outros objetos para tipos Python nativos."""
@@ -77,6 +88,10 @@ def load_results_from_supabase():
         affected_ineps_map = {}
 
         for r in rows:
+            sha = r.get("sha256", "")
+            thumb_a = r.get("thumb_url_a") or (f"{sha[:16]}_1_0.jpg" if sha else "default.jpg")
+            thumb_b = r.get("thumb_url_b") or (f"{sha[:16]}_1_1.jpg" if sha else "default.jpg")
+
             pair = {
                 "type": r.get("tipo_duplicata") or "Exata (100%)",
                 "similarity": float(r.get("similaridade") or 100.0),
@@ -87,7 +102,7 @@ def load_results_from_supabase():
                     "fornecedor": r.get("fornecedor_a"),
                     "pdf_filename": r.get("pdf_filename_a"),
                     "page": r.get("pagina_a") or 1,
-                    "thumb_filename": f"{r.get('sha256', '')[:16]}_1_0.jpg"
+                    "thumb_filename": thumb_a
                 },
                 "imgB": {
                     "inep": r.get("inep_b"),
@@ -95,7 +110,7 @@ def load_results_from_supabase():
                     "fornecedor": r.get("fornecedor_b"),
                     "pdf_filename": r.get("pdf_filename_b"),
                     "page": r.get("pagina_b") or 1,
-                    "thumb_filename": f"{r.get('sha256', '')[:16]}_1_1.jpg"
+                    "thumb_filename": thumb_b
                 }
             }
             duplicate_pairs.append(pair)

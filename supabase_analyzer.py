@@ -344,7 +344,9 @@ class SupabaseRDOAnalyzer:
                 "tipo_duplicata": p.get("type"),
                 "similaridade": p.get("similarity"),
                 "distancia_hamming": p.get("distance"),
-                "sha256": imgA.get("sha256")
+                "sha256": imgA.get("sha256"),
+                "thumb_url_a": imgA.get("thumb_filename"),
+                "thumb_url_b": imgB.get("thumb_filename")
             })
 
         try:
