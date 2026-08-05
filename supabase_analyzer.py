@@ -327,10 +327,67 @@ class SupabaseRDOAnalyzer:
             "duplicate_pairs": all_pairs
         }
 
-        # Salvar resultados automaticamente no Supabase
+        # Identificar IDs e HASHES das imagens que possuem duplicata
+        duplicate_image_ids = set()
+        duplicate_hashes = set()
+        for p in all_pairs:
+            if "imgA" in p:
+                if p["imgA"].get("id"): duplicate_image_ids.add(p["imgA"]["id"])
+                if p["imgA"].get("sha256"): duplicate_hashes.add(p["imgA"]["sha256"])
+            if "imgB" in p:
+                if p["imgB"].get("id"): duplicate_image_ids.add(p["imgB"]["id"])
+                if p["imgB"].get("sha256"): duplicate_hashes.add(p["imgB"]["sha256"])
+
+        # 1. Salvar lista completa de analisados com a flag tem_duplicata na tabela rdo_analisados
+        self.save_analisados_to_supabase(duplicate_image_ids, duplicate_hashes)
+
+        # 2. Salvar pares de duplicatas na tabela duplicatas_rdo
         self.save_duplicates_to_supabase(all_pairs)
 
         return result
+
+    def save_analisados_to_supabase(self, duplicate_ids: set, duplicate_hashes: set):
+        """Salva todos os PDFs/imagens analisados na tabela rdo_analisados do Supabase."""
+        if not self.extracted_images:
+            return
+
+        records = []
+        for img in self.extracted_images:
+            img_id = img.get("id")
+            sha = img.get("sha256")
+            has_dup = (img_id in duplicate_ids) or (sha in duplicate_hashes)
+
+            records.append({
+                "inep": img.get("inep"),
+                "uf": img.get("uf"),
+                "fornecedor": img.get("fornecedor"),
+                "pdf_filename": img.get("pdf_filename"),
+                "pdf_url": img.get("pdf_url"),
+                "pagina": img.get("page"),
+                "sha256": sha,
+                "thumb_url": img.get("thumb_filename"),
+                "tem_duplicata": has_dup
+            })
+
+        batch_size = 200
+        for b in range(0, len(records), batch_size):
+            batch = records[b:b+batch_size]
+            try:
+                url = f"{SUPABASE_URL}/rdo_analisados"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(batch).encode("utf-8"),
+                    headers={
+                        "apikey": SERVICE_KEY,
+                        "Authorization": f"Bearer {SERVICE_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req) as resp:
+                    print(f"[Supabase Persist] Lote de {len(batch)} registros salvos na tabela rdo_analisados!")
+            except Exception as e:
+                print(f"[Supabase Persist Error] Falha ao salvar em rdo_analisados: {e}")
 
     def save_duplicates_to_supabase(self, pairs: List[Dict[str, Any]]):
         """Salva os pares de duplicatas diretamente na tabela duplicatas_rdo do Supabase."""

@@ -38,7 +38,10 @@
                         <i class="fa-solid fa-database"></i> Análise por Fornecedor
                     </button>
                     <button class="tab-btn" id="tabDbConsultBtn" onclick="switchTab('dbconsult')">
-                        <i class="fa-solid fa-table-list"></i> Consultar Banco de Duplicatas
+                        <i class="fa-solid fa-table-list"></i> Banco de Duplicatas
+                    </button>
+                    <button class="tab-btn" id="tabAllAnalisadosBtn" onclick="switchTab('allanalisados')">
+                        <i class="fa-solid fa-list-check"></i> Todos os PDFs Analisados
                     </button>
                     <button class="tab-btn" id="tabUploadBtn" onclick="switchTab('upload')">
                         <i class="fa-solid fa-cloud-arrow-up"></i> Upload de PDFs
@@ -91,6 +94,30 @@
                         </div>
                         <p class="help-text">
                             <i class="fa-solid fa-database"></i> Exibe instantaneamente todas as ocorrências com INEP, UF, Fornecedor e Fotos gravadas no banco de dados.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Tab Todos os PDFs Analisados -->
+                <div class="tab-content" id="tabAllAnalisados">
+                    <div class="folder-scan-form">
+                        <label>Filtrar Todos os PDFs Registrados na Base:</label>
+                        <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
+                            <i class="fa-solid fa-filter input-icon"></i>
+                            <select id="analisadosSupplierSelect" style="flex:1; min-width:220px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadAllAnalisados(1)">
+                                <option value="">-- Todos os Fornecedores --</option>
+                            </select>
+                            <select id="analisadosDupSelect" style="width:200px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadAllAnalisados(1)">
+                                <option value="">-- Status de Duplicata --</option>
+                                <option value="true">⚠️ Com Duplicata (Sim)</option>
+                                <option value="false">✅ Sem Duplicata (Não)</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadAllAnalisados(1)">
+                                <i class="fa-solid fa-magnifying-glass"></i> Filtrar Analisados
+                            </button>
+                        </div>
+                        <p class="help-text">
+                            <i class="fa-solid fa-circle-check"></i> Exibe a lista completa de todos os PDFs auditados no Supabase (tabela <strong>rdo_analisados</strong>) com o indicador de duplicata.
                         </p>
                     </div>
                 </div>

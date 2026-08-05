@@ -33,6 +33,8 @@ async function loadSuppliers() {
         select.innerHTML = '<option value="">-- Selecione um Fornecedor --</option>';
         const dbSelect = document.getElementById('dbSupplierSelect');
         if (dbSelect) dbSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
+        const anSelect = document.getElementById('analisadosSupplierSelect');
+        if (anSelect) anSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
 
         suppliers.forEach(name => {
             const opt = document.createElement('option');
@@ -45,6 +47,12 @@ async function loadSuppliers() {
                 optDb.value = name;
                 optDb.textContent = name;
                 dbSelect.appendChild(optDb);
+            }
+            if (anSelect) {
+                const optAn = document.createElement('option');
+                optAn.value = name;
+                optAn.textContent = name;
+                anSelect.appendChild(optAn);
             }
         });
     } catch(e) {
@@ -66,12 +74,69 @@ function switchTab(tabName) {
         document.getElementById('tabDbConsultBtn').classList.add('active');
         document.getElementById('tabDbConsult').classList.add('active');
         loadDbDuplicates(1);
+    } else if (tabName === 'allanalisados') {
+        document.getElementById('tabAllAnalisadosBtn').classList.add('active');
+        document.getElementById('tabAllAnalisados').classList.add('active');
+        loadAllAnalisados(1);
     } else if (tabName === 'upload') {
         document.getElementById('tabUploadBtn').classList.add('active');
         document.getElementById('tabUpload').classList.add('active');
     } else {
         document.getElementById('tabScanBtn').classList.add('active');
         document.getElementById('tabScan').classList.add('active');
+    }
+}
+
+async function loadAllAnalisados(page = 1) {
+    const supplierSel = document.getElementById('analisadosSupplierSelect');
+    const dupSel = document.getElementById('analisadosDupSelect');
+    const supplier = supplierSel ? supplierSel.value : '';
+    const temDup = dupSel ? dupSel.value : '';
+
+    try {
+        const resp = await fetch(`/api/analisados?page=${page}&limit=50&fornecedor=${encodeURIComponent(supplier)}&tem_duplicata=${temDup}`);
+        const data = await resp.json();
+
+        if (resp.ok) {
+            // Renderizar tabela de PDFs analisados
+            const pairsSynthesized = data.analisados.map(item => ({
+                type: item.tem_duplicata ? 'Duplicata Identificada' : 'Único (Sem Cópia)',
+                similarity: item.tem_duplicata ? 100 : 0,
+                imgA: {
+                    inep: item.inep,
+                    uf: item.uf,
+                    fornecedor: item.fornecedor,
+                    pdf_filename: item.pdf_filename,
+                    pdf_url: item.pdf_url,
+                    page: item.pagina,
+                    thumb_filename: item.thumb_url || (item.sha256 ? `${item.sha256.substring(0,16)}_1_0.jpg` : 'default.jpg')
+                },
+                imgB: {
+                    inep: item.inep,
+                    uf: item.uf,
+                    fornecedor: item.fornecedor,
+                    pdf_filename: item.pdf_filename,
+                    pdf_url: item.pdf_url,
+                    page: item.pagina,
+                    thumb_filename: item.thumb_url || (item.sha256 ? `${item.sha256.substring(0,16)}_1_0.jpg` : 'default.jpg')
+                }
+            }));
+
+            displayResults({
+                total_schools_analyzed: 26965,
+                total_images: data.total,
+                total_duplicate_pairs: data.analisados.filter(i => i.tem_duplicata).length,
+                exact_duplicate_pairs: data.analisados.filter(i => i.tem_duplicata).length,
+                visual_duplicate_pairs: 0,
+                affected_ineps_count: new Set(data.analisados.map(i => i.inep)).size,
+                duplicate_pairs: pairsSynthesized
+            });
+
+            document.getElementById('supplierAnalyzedName').textContent = 'Relatório Geral de PDFs Auditados';
+            document.getElementById('supplierSummaryText').textContent = `Exibindo ${data.analisados.length} de ${data.total} PDFs gravados na tabela rdo_analisados.`;
+        }
+    } catch (e) {
+        console.error("Erro ao carregar lista de analisados:", e);
     }
 }
 

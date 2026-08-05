@@ -213,6 +213,50 @@ def get_db_duplicates():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/analisados", methods=["GET"])
+def get_analisados():
+    """Retorna lista de todos os PDFs/imagens analisados salvos na tabela rdo_analisados."""
+    import urllib.request, json as json_lib, urllib.parse as up
+    supplier = request.args.get("fornecedor", "").strip()
+    dup_filter = request.args.get("tem_duplicata", "").strip().lower()
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 50))
+    offset = (page - 1) * limit
+
+    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
+    supabase_url = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/rdo_analisados?select=*"
+
+    if supplier:
+        encoded_sup = up.quote(supplier)
+        supabase_url += f"&fornecedor=ilike.*{encoded_sup}*"
+
+    if dup_filter in ["true", "1"]:
+        supabase_url += "&tem_duplicata=eq.true"
+    elif dup_filter in ["false", "0"]:
+        supabase_url += "&tem_duplicata=eq.false"
+
+    supabase_url += f"&order=criado_em.desc&limit={limit}&offset={offset}"
+
+    try:
+        req = urllib.request.Request(supabase_url, headers={
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+            "Prefer": "count=exact"
+        })
+        with urllib.request.urlopen(req) as resp:
+            rows = json_lib.loads(resp.read().decode())
+            content_range = resp.headers.get("content-range")
+            total = int(content_range.split("/")[-1]) if content_range and "/" in content_range else len(rows)
+
+        return jsonify({
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "analisados": rows
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/status", methods=["GET"])
 def get_status():
     global processing_state
@@ -438,17 +482,18 @@ def run_all_suppliers_task(limit_per_supplier: int = 5000):
         processing_state["current_file"] = f"Iniciando varredura individual de {total_suppliers} Fornecedores..."
         processing_state["results"] = None
 
-    # Limpar a tabela duplicatas_rdo no Supabase para iniciar do zero
-    try:
-        req_del = urllib.request.Request(
-            "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/duplicatas_rdo?id=not.is.null",
-            headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
-            method="DELETE"
-        )
-        with urllib.request.urlopen(req_del) as resp:
-            pass
-    except Exception as e_del:
-        print(f"Aviso ao limpar duplicatas_rdo: {e_del}")
+    # Limpar as tabelas duplicatas_rdo e rdo_analisados no Supabase para iniciar do zero
+    for tbl in ["duplicatas_rdo", "rdo_analisados"]:
+        try:
+            req_del = urllib.request.Request(
+                f"https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/{tbl}?id=not.is.null",
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                method="DELETE"
+            )
+            with urllib.request.urlopen(req_del) as resp:
+                pass
+        except Exception as e_del:
+            print(f"Aviso ao limpar {tbl}: {e_del}")
 
     accumulated_pairs = []
     accumulated_ineps = {}
