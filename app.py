@@ -397,96 +397,85 @@ def get_suppliers():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def run_all_suppliers_task(limit_per_supplier: int = 5000):
+def run_all_suppliers_task(limit_per_supplier: int = 27000):
     global processing_state
     
-    # 1. Buscar lista de fornecedores
     import urllib.request, json as json_lib
     service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
-    url = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/escolas_conectadas?select=fornecedor&fornecedor=not.is.null&limit=27000"
     
-    try:
-        req = urllib.request.Request(url, headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"})
-        with urllib.request.urlopen(req) as resp:
-            data = json_lib.loads(resp.read().decode())
-        
-        all_names = set()
-        for row in data:
-            forn = row.get("fornecedor") or ""
-            if " (RI)" in forn or " (RE)" in forn:
-                for part in forn.split("/"):
-                    name = part.strip().replace(" (RI)", "").replace(" (RE)", "").strip()
-                    if name: all_names.add(name)
-            elif forn.strip():
-                all_names.add(forn.strip())
-        
-        suppliers = sorted(all_names)
-    except Exception as e:
-        with processing_lock:
-            processing_state["status"] = "error"
-            processing_state["error_message"] = f"Erro ao buscar fornecedores: {e}"
-        return
-
-    total_suppliers = len(suppliers)
-    accumulated_pairs = []
-    accumulated_ineps = {}
-    total_images_extracted = 0
-
     with processing_lock:
         processing_state["status"] = "processing"
-        processing_state["total_files"] = total_suppliers
+        processing_state["total_files"] = 0
         processing_state["processed_files"] = 0
+        processing_state["progress_pct"] = 2.0
         processing_state["start_time"] = time.time()
+        processing_state["current_file"] = "Carregando a base completa de 26.965 escolas do Supabase..."
+        processing_state["results"] = None
 
-    for idx, supplier in enumerate(suppliers):
-        with processing_lock:
-            processing_state["processed_files"] = idx + 1
-            pct = round(((idx) / total_suppliers) * 100, 1)
-            processing_state["progress_pct"] = max(5.0, pct)
-            processing_state["current_file"] = f"Fornecedor {idx+1}/{total_suppliers}: '{supplier}'"
+    try:
+        supabase_analyzer.reset()
 
+        # Limpar tabela duplicatas_rdo no Supabase antes de nova varredura completa
         try:
-            supabase_analyzer.reset()
-            schools = supabase_analyzer.fetch_schools_from_supabase(fornecedor_filter=supplier, limit=limit_per_supplier)
-            if schools:
-                imgs_count = supabase_analyzer.process_school_pdfs(schools)
-                total_images_extracted += imgs_count
-                res = supabase_analyzer.analyze_duplicates()
-                
-                accumulated_pairs.extend(res.get("duplicate_pairs", []))
-                for item in res.get("affected_ineps", []):
-                    key = str(item.get("inep") or item.get("filename"))
-                    if key not in accumulated_ineps:
-                        accumulated_ineps[key] = item
+            req_del = urllib.request.Request(
+                "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/duplicatas_rdo?id=not.is.null",
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                method="DELETE"
+            )
+            with urllib.request.urlopen(req_del) as resp:
+                pass
+        except Exception as e_del:
+            print(f"Aviso ao limpar duplicatas_rdo: {e_del}")
 
-                with processing_lock:
-                    processing_state["total_images"] = total_images_extracted
-        except Exception as err:
-            print(f"Erro ao processar fornecedor {supplier}: {err}")
+        # 1. Carregar todas as escolas conectadas que possuem PDFs
+        schools = supabase_analyzer.fetch_schools_from_supabase(limit=27000)
+        total_schools = len(schools)
 
-    # Finalizar
-    affected_list = list(accumulated_ineps.values())
-    final_results = {
-        "total_schools_analyzed": total_suppliers,
-        "total_images": total_images_extracted,
-        "total_duplicate_pairs": len(accumulated_pairs),
-        "exact_duplicate_pairs": len([p for p in accumulated_pairs if p.get("similarity") == 100]),
-        "visual_duplicate_pairs": len([p for p in accumulated_pairs if p.get("similarity", 0) < 100]),
-        "affected_ineps_count": len(affected_list),
-        "affected_ineps": affected_list,
-        "duplicate_pairs": accumulated_pairs
-    }
+        with processing_lock:
+            processing_state["total_files"] = total_schools
+            processing_state["progress_pct"] = 5.0
 
-    excel_path = os.path.join(REPORTS_DIR, "Relatorio_Duplicatas_Todos_Fornecedores.xlsx")
-    supabase_analyzer.duplicate_pairs = accumulated_pairs
-    supabase_analyzer.generate_excel_report(excel_path)
+        if total_schools == 0:
+            with processing_lock:
+                processing_state["status"] = "error"
+                processing_state["error_message"] = "Nenhuma escola com PDFs encontrada na base."
+            return
 
-    with processing_lock:
-        processing_state["status"] = "completed"
-        processing_state["progress_pct"] = 100.0
-        processing_state["elapsed_time"] = round(time.time() - processing_state["start_time"], 1)
-        processing_state["results"] = final_results
-        processing_state["excel_path"] = excel_path
+        # 2. Processar PDFs e extrair fotos de todas as escolas
+        def progress_cb(current, total, forn):
+            with processing_lock:
+                processing_state["processed_files"] = current
+                pct = 5.0 + ((current / max(1, total)) * 80.0)
+                processing_state["progress_pct"] = round(pct, 1)
+                processing_state["current_file"] = f"Analisando Escola {current}/{total} ({forn[:30]})..."
+                processing_state["total_images"] = len(supabase_analyzer.extracted_images)
+
+        total_imgs = supabase_analyzer.process_school_pdfs(schools, progress_callback=progress_cb)
+
+        with processing_lock:
+            processing_state["total_images"] = total_imgs
+            processing_state["progress_pct"] = 88.0
+            processing_state["current_file"] = f"Executando cruzamento global entre todas as {total_imgs} fotos extraídas..."
+
+        # 3. Analisar duplicatas entre INEPs diferentes (Cruzando todos os fornecedores)
+        results = supabase_analyzer.analyze_duplicates()
+
+        # 4. Gerar Relatório Excel
+        excel_path = os.path.join(REPORTS_DIR, "Relatorio_Duplicatas_Todos_Fornecedores.xlsx")
+        supabase_analyzer.generate_excel_report(excel_path)
+
+        with processing_lock:
+            processing_state["status"] = "completed"
+            processing_state["progress_pct"] = 100.0
+            processing_state["elapsed_time"] = round(time.time() - processing_state["start_time"], 1)
+            processing_state["results"] = results
+            processing_state["excel_path"] = excel_path
+
+    except Exception as err:
+        with processing_lock:
+            processing_state["status"] = "error"
+            processing_state["error_message"] = f"Erro na análise geral: {err}"
+        print(f"Erro na análise geral: {err}")
 
 @app.route("/api/scan-all-suppliers", methods=["POST"])
 def scan_all_suppliers():
