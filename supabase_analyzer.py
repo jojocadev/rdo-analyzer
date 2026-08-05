@@ -362,22 +362,25 @@ class SupabaseRDOAnalyzer:
                 "thumb_url_b": imgB.get("thumb_filename")
             })
 
-        try:
-            url = f"{SUPABASE_URL}/duplicatas_rdo"
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(records).encode("utf-8"),
-                headers={
-                    "apikey": SERVICE_KEY,
-                    "Authorization": f"Bearer {SERVICE_KEY}",
-                    "Content-Type": "application/json"
-                },
-                method="POST"
-            )
-            with urllib.request.urlopen(req) as resp:
-                print(f"[Supabase Persist] {len(records)} duplicatas salvas na tabela duplicatas_rdo!")
-        except Exception as e:
-            print(f"[Supabase Persist Error] Falha ao salvar duplicatas: {e}")
+        batch_size = 200
+        for b in range(0, len(records), batch_size):
+            batch = records[b:b+batch_size]
+            try:
+                url = f"{SUPABASE_URL}/duplicatas_rdo"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(batch).encode("utf-8"),
+                    headers={
+                        "apikey": SERVICE_KEY,
+                        "Authorization": f"Bearer {SERVICE_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req) as resp:
+                    print(f"[Supabase Persist] Lote de {len(batch)} duplicatas salvas na tabela duplicatas_rdo!")
+            except Exception as e:
+                print(f"[Supabase Persist Error] Falha ao salvar lote de duplicatas: {e}")
 
 
     def generate_excel_report(self, output_path: str) -> str:
