@@ -55,8 +55,86 @@ def sanitize_json(obj):
         return obj.item()
     return obj
 
+def load_results_from_supabase():
+    """Carrega o último resultado salvo na tabela duplicatas_rdo do Supabase caso a memória do servidor esteja vazia."""
+    global processing_state
+    if processing_state["results"] is not None:
+        return
+
+    import urllib.request, json as json_lib
+    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
+    supabase_url = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/duplicatas_rdo?select=*&limit=5000"
+    
+    try:
+        req = urllib.request.Request(supabase_url, headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"})
+        with urllib.request.urlopen(req) as resp:
+            rows = json_lib.loads(resp.read().decode())
+        
+        if not rows:
+            return
+
+        duplicate_pairs = []
+        affected_ineps_map = {}
+
+        for r in rows:
+            pair = {
+                "type": r.get("tipo_duplicata") or "Exata (100%)",
+                "similarity": float(r.get("similaridade") or 100.0),
+                "distance": r.get("distancia_hamming") or 0,
+                "imgA": {
+                    "inep": r.get("inep_a"),
+                    "uf": r.get("uf_a"),
+                    "fornecedor": r.get("fornecedor_a"),
+                    "pdf_filename": r.get("pdf_filename_a"),
+                    "page": r.get("pagina_a") or 1,
+                    "thumb_filename": f"{r.get('sha256', '')[:16]}_1_0.jpg"
+                },
+                "imgB": {
+                    "inep": r.get("inep_b"),
+                    "uf": r.get("uf_b"),
+                    "fornecedor": r.get("fornecedor_b"),
+                    "pdf_filename": r.get("pdf_filename_b"),
+                    "page": r.get("pagina_b") or 1,
+                    "thumb_filename": f"{r.get('sha256', '')[:16]}_1_1.jpg"
+                }
+            }
+            duplicate_pairs.append(pair)
+
+            for key in ("imgA", "imgB"):
+                inep = pair[key]["inep"]
+                if inep:
+                    if inep not in affected_ineps_map:
+                        affected_ineps_map[inep] = {
+                            "inep": inep,
+                            "uf": pair[key]["uf"],
+                            "fornecedor": pair[key]["fornecedor"],
+                            "duplicate_count": 0
+                        }
+                    affected_ineps_map[inep]["duplicate_count"] += 1
+
+        results = {
+            "total_schools_analyzed": 26965,
+            "total_images": len(rows) * 2,
+            "exact_duplicate_pairs": len([p for p in duplicate_pairs if p["similarity"] == 100]),
+            "visual_duplicate_pairs": len([p for p in duplicate_pairs if p["similarity"] < 100]),
+            "total_duplicate_pairs": len(duplicate_pairs),
+            "affected_ineps_count": len(affected_ineps_map),
+            "affected_ineps": list(affected_ineps_map.values()),
+            "duplicate_pairs": duplicate_pairs
+        }
+
+        with processing_lock:
+            processing_state["status"] = "completed"
+            processing_state["progress_pct"] = 100.0
+            processing_state["results"] = results
+            processing_state["excel_path"] = os.path.join(REPORTS_DIR, "Relatorio_Duplicatas_Supabase.xlsx")
+    except Exception as e:
+        print(f"Erro ao carregar do Supabase: {e}")
+
 @app.route("/api/status", methods=["GET"])
 def get_status():
+    global processing_state
+    load_results_from_supabase()
     with processing_lock:
         state = sanitize_json(processing_state.copy())
         if state["status"] == "processing" and state["start_time"] > 0:
