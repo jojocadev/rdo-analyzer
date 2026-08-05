@@ -31,11 +31,21 @@ async function loadSuppliers() {
         if (!select) return;
 
         select.innerHTML = '<option value="">-- Selecione um Fornecedor --</option>';
+        const dbSelect = document.getElementById('dbSupplierSelect');
+        if (dbSelect) dbSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
+
         suppliers.forEach(name => {
             const opt = document.createElement('option');
             opt.value = name;
             opt.textContent = name;
             select.appendChild(opt);
+
+            if (dbSelect) {
+                const optDb = document.createElement('option');
+                optDb.value = name;
+                optDb.textContent = name;
+                dbSelect.appendChild(optDb);
+            }
         });
     } catch(e) {
         console.error("Erro ao carregar fornecedores:", e);
@@ -52,12 +62,43 @@ function switchTab(tabName) {
     if (tabName === 'supabase') {
         document.getElementById('tabSupabaseBtn').classList.add('active');
         document.getElementById('tabSupabase').classList.add('active');
+    } else if (tabName === 'dbconsult') {
+        document.getElementById('tabDbConsultBtn').classList.add('active');
+        document.getElementById('tabDbConsult').classList.add('active');
+        loadDbDuplicates(1);
     } else if (tabName === 'upload') {
         document.getElementById('tabUploadBtn').classList.add('active');
         document.getElementById('tabUpload').classList.add('active');
     } else {
         document.getElementById('tabScanBtn').classList.add('active');
         document.getElementById('tabScan').classList.add('active');
+    }
+}
+
+async function loadDbDuplicates(page = 1) {
+    const dbSelect = document.getElementById('dbSupplierSelect');
+    const supplier = dbSelect ? dbSelect.value : '';
+
+    try {
+        const resp = await fetch(`/api/db-duplicates?page=${page}&limit=50&fornecedor=${encodeURIComponent(supplier)}`);
+        const data = await resp.json();
+
+        if (resp.ok) {
+            displayResults({
+                total_schools_analyzed: 26965,
+                total_images: data.total * 2,
+                total_duplicate_pairs: data.total,
+                exact_duplicate_pairs: data.duplicate_pairs.filter(p => p.similarity === 100).length,
+                visual_duplicate_pairs: data.duplicate_pairs.filter(p => p.similarity < 100).length,
+                affected_ineps_count: new Set(data.duplicate_pairs.map(p => p.imgA.inep).concat(data.duplicate_pairs.map(p => p.imgB.inep))).size,
+                duplicate_pairs: data.duplicate_pairs
+            });
+
+            document.getElementById('supplierAnalyzedName').textContent = supplier ? `Consultando Banco: ${supplier}` : 'Todas as Duplicatas do Banco Supabase';
+            document.getElementById('supplierSummaryText').textContent = `Exibindo ${data.duplicate_pairs.length} de ${data.total} ocorrências gravadas no Supabase.`;
+        }
+    } catch (e) {
+        console.error("Erro ao carregar duplicatas do banco:", e);
     }
 }
 

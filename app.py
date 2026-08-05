@@ -146,6 +146,73 @@ def load_results_from_supabase():
     except Exception as e:
         print(f"Erro ao carregar do Supabase: {e}")
 
+@app.route("/api/db-duplicates", methods=["GET"])
+def get_db_duplicates():
+    """Consulta diretamente a tabela duplicatas_rdo no Supabase com paginação e busca por fornecedor."""
+    import urllib.request, json as json_lib, urllib.parse as up
+    supplier = request.args.get("fornecedor", "").strip()
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 50))
+    offset = (page - 1) * limit
+
+    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
+    supabase_url = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/duplicatas_rdo?select=*"
+    
+    if supplier:
+        encoded_sup = up.quote(supplier)
+        supabase_url += f"&or=(fornecedor_a.ilike.*{encoded_sup}*,fornecedor_b.ilike.*{encoded_sup}*)"
+        
+    supabase_url += f"&order=similaridade.desc&limit={limit}&offset={offset}"
+
+    try:
+        req = urllib.request.Request(supabase_url, headers={
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+            "Prefer": "count=exact"
+        })
+        with urllib.request.urlopen(req) as resp:
+            rows = json_lib.loads(resp.read().decode())
+            content_range = resp.headers.get("content-range")
+            total = int(content_range.split("/")[-1]) if content_range and "/" in content_range else len(rows)
+
+        duplicate_pairs = []
+        for r in rows:
+            sha = r.get("sha256", "")
+            thumb_a = r.get("thumb_url_a") or (f"{sha[:16]}_1_0.jpg" if sha else "default.jpg")
+            thumb_b = r.get("thumb_url_b") or (f"{sha[:16]}_1_1.jpg" if sha else "default.jpg")
+            duplicate_pairs.append({
+                "type": r.get("tipo_duplicata") or "Exata (100%)",
+                "similarity": float(r.get("similaridade") or 100.0),
+                "distance": r.get("distancia_hamming") or 0,
+                "imgA": {
+                    "inep": r.get("inep_a"),
+                    "uf": r.get("uf_a"),
+                    "fornecedor": r.get("fornecedor_a"),
+                    "pdf_filename": r.get("pdf_filename_a"),
+                    "pdf_url": r.get("pdf_url_a"),
+                    "page": r.get("pagina_a") or 1,
+                    "thumb_filename": thumb_a
+                },
+                "imgB": {
+                    "inep": r.get("inep_b"),
+                    "uf": r.get("uf_b"),
+                    "fornecedor": r.get("fornecedor_b"),
+                    "pdf_filename": r.get("pdf_filename_b"),
+                    "pdf_url": r.get("pdf_url_b"),
+                    "page": r.get("pagina_b") or 1,
+                    "thumb_filename": thumb_b
+                }
+            })
+
+        return jsonify({
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "duplicate_pairs": duplicate_pairs
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/status", methods=["GET"])
 def get_status():
     global processing_state

@@ -35,7 +35,10 @@
             <section class="card input-card">
                 <div class="tabs-header">
                     <button class="tab-btn active" id="tabSupabaseBtn" onclick="switchTab('supabase')">
-                        <i class="fa-solid fa-database"></i> Análise por Fornecedor (Supabase)
+                        <i class="fa-solid fa-database"></i> Análise por Fornecedor
+                    </button>
+                    <button class="tab-btn" id="tabDbConsultBtn" onclick="switchTab('dbconsult')">
+                        <i class="fa-solid fa-table-list"></i> Consultar Banco de Duplicatas
                     </button>
                     <button class="tab-btn" id="tabUploadBtn" onclick="switchTab('upload')">
                         <i class="fa-solid fa-cloud-arrow-up"></i> Upload de PDFs
@@ -70,6 +73,25 @@
                             <i class="fa-solid fa-triangle-exclamation"></i>
                             <strong>Analisar todos os fornecedores</strong> processa cada um em sequência e pode levar <strong>várias horas</strong> dependendo da quantidade de PDFs. Mantenha a janela aberta.
                         </div>
+                    </div>
+                </div>
+
+                <!-- Tab Consultar Banco -->
+                <div class="tab-content" id="tabDbConsult">
+                    <div class="folder-scan-form">
+                        <label for="dbSupplierSelect">Filtrar Duplicatas Gravadas por Fornecedor:</label>
+                        <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
+                            <i class="fa-solid fa-filter input-icon"></i>
+                            <select id="dbSupplierSelect" style="flex:1; min-width:260px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadDbDuplicates(1)">
+                                <option value="">-- Todos os Fornecedores --</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadDbDuplicates(1)">
+                                <i class="fa-solid fa-magnifying-glass"></i> Consultar Banco Supabase
+                            </button>
+                        </div>
+                        <p class="help-text">
+                            <i class="fa-solid fa-database"></i> Exibe instantaneamente todas as ocorrências com INEP, UF, Fornecedor e Fotos gravadas no banco de dados.
+                        </p>
                     </div>
                 </div>
 
