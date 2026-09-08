@@ -13,7 +13,7 @@ import glob
 import time
 import threading
 
-from config import SUPABASE_URL, SERVICE_KEY
+from config import SUPABASE_URL, SERVICE_KEY, exigir_credenciais
 from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 from analyzer import RDOImageAnalyzer
@@ -636,6 +636,7 @@ fase_cancel = threading.Event()
 def get_fases():
     """Lista as fases disponíveis com a contagem de escolas de cada uma."""
     try:
+        exigir_credenciais()
         return jsonify(fase_engine.fetch_fases())
     except Exception as e:
         return jsonify({"error": str(e)}), 500

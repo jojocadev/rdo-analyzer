@@ -70,7 +70,7 @@ import imagehash
 import numpy as np
 from PIL import Image
 
-from config import SUPABASE_URL, SERVICE_KEY  # noqa: E402
+from config import SUPABASE_URL, SERVICE_KEY, exigir_credenciais  # noqa: E402
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "extracted_images")
 
@@ -96,6 +96,9 @@ def log(msg):
 # --------------------------------------------------------------------------- #
 
 def _sb_request(url, data=None, method="GET", extra_headers=None):
+    # Sem a chave, o Supabase responde 401 seco e a tela mostra "Unauthorized"
+    # sem dizer o motivo. Falhar aqui deixa claro que falta configurar o ambiente.
+    exigir_credenciais()
     headers = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
     if data is not None:
         headers["Content-Type"] = "application/json"

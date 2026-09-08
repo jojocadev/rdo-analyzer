@@ -32,3 +32,6 @@ Banco de Escolas/
 
 # Backups do Supabase gerados antes de cada atualizacao de base
 backup_fase5_supabase_*.json
+
+# Pacotes de deploy (historico + miniaturas para a VPS)
+pacote_painel_*.zip
