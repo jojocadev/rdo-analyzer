@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Duplicatas · RDO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600;650;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="duplicatas.css">
+</head>
+<body>
+<div class="wrap">
+
+    <!-- topo -->
+    <header class="topbar">
+        <div>
+            <div class="marca">
+                <img src="logo-aprender-conectado.png" alt="Aprender Conectado">
+            </div>
+
+            <h1>Painel de Duplicatas</h1>
+            <p class="sub" id="runInfo">Carregando execução…</p>
+        </div>
+        <div style="display:flex; gap:.55rem; align-items:center; flex-wrap:wrap;">
+            <div class="field" style="min-width:280px;">
+                <label for="runSelect">Execução</label>
+                <select id="runSelect"></select>
+            </div>
+            <a class="btn btn-ghost" href="/" title="Voltar para a análise">
+                <i class="fa-solid fa-arrow-left"></i> Análise
+            </a>
+        </div>
+    </header>
+
+    <!-- métricas -->
+    <section class="cards" id="cards"></section>
+
+    <!-- gráficos -->
+    <section class="charts">
+        <div class="card">
+            <div class="panel-head">
+                <h2>Pares por fornecedor</h2>
+                <span class="meta" id="metaForn">—</span>
+            </div>
+            <div class="bars" id="barsForn"></div>
+        </div>
+        <div class="card">
+            <div class="panel-head">
+                <h2>Distribuição por estado</h2>
+                <span class="meta" id="metaUf">—</span>
+            </div>
+            <div class="bars" id="barsUf"></div>
+        </div>
+    </section>
+
+    <!-- filtros -->
+    <section class="card filters">
+        <div class="filter-grid">
+            <div class="field">
+                <label for="fUf">Estado</label>
+                <select id="fUf"><option value="">Todos os estados</option></select>
+            </div>
+            <div class="field">
+                <label for="fMunicipio">Município</label>
+                <select id="fMunicipio"><option value="">Todos os municípios</option></select>
+            </div>
+            <div class="field">
+                <label for="fFornecedor">Fornecedor</label>
+                <select id="fFornecedor"><option value="">Todos os fornecedores</option></select>
+            </div>
+            <div class="field">
+                <label for="fTipo">Similaridade</label>
+                <select id="fTipo">
+                    <option value="">Todas</option>
+                    <option value="exatas">Somente 100% exatas</option>
+                    <option value="visuais">Contém visuais (&lt;100%)</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fFp">Falso positivo</label>
+                <select id="fFp">
+                    <option value="ocultar">Ocultar marcados</option>
+                    <option value="">Mostrar todos</option>
+                    <option value="somente">Somente marcados</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fMinImagens">Mínimo de imagens</label>
+                <select id="fMinImagens">
+                    <option value="0">Qualquer</option>
+                    <option value="2">2 ou mais</option>
+                    <option value="3">3 ou mais</option>
+                    <option value="5">5 ou mais</option>
+                    <option value="10">10 ou mais</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fFotos">Tipo de imagem</label>
+                <select id="fFotos">
+                    <option value="">Qualquer imagem</option>
+                    <option value="1">Somente fotos de câmera</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fMesmoMunicipio">Município das escolas</label>
+                <select id="fMesmoMunicipio">
+                    <option value="">Qualquer</option>
+                    <option value="sim">Mesmo município</option>
+                    <option value="nao">Municípios diferentes</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fGravidade">Gravidade</label>
+                <select id="fGravidade">
+                    <option value="">Qualquer</option>
+                    <option value="mesmo_pdf">Mesmo PDF nos dois INEPs</option>
+                    <option value="pdf_divergente">PDF é de outra escola</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fModoTexto">Nome do PDF</label>
+                <select id="fModoTexto">
+                    <option value="nao_contem">Não contém</option>
+                    <option value="contem">Contém</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fTexto">Texto no nome do PDF</label>
+                <input type="text" id="fTexto" placeholder="Ex.: tiff, GESAC, CONEC…">
+            </div>
+            <div class="field wide">
+                <label for="fBusca">Buscar (INEP, escola, município ou fornecedor)</label>
+                <input type="text" id="fBusca" placeholder="Ex.: 12009679 ou ESC MARIA DO CARMO…">
+            </div>
+        </div>
+
+        <div class="filter-actions">
+            <button class="btn btn-primary" id="btnFiltrar">
+                <i class="fa-solid fa-filter"></i> Aplicar filtros
+            </button>
+            <button class="btn" id="btnLimpar">
+                <i class="fa-solid fa-eraser"></i> Limpar
+            </button>
+            <span class="spacer"></span>
+            <button class="btn btn-green" id="btnCsv">
+                <i class="fa-solid fa-file-csv"></i> Exportar CSV
+            </button>
+            <button class="btn" id="btnZip">
+                <i class="fa-solid fa-file-zipper"></i> Baixar imagens (ZIP)
+            </button>
+        </div>
+    </section>
+
+    <!-- tabela -->
+    <section class="card">
+        <div class="table-head">
+            <div class="count" id="tableCount">—</div>
+            <div style="display:flex; gap:.55rem; align-items:center;">
+                <label class="field" style="flex-direction:row; align-items:center; gap:.45rem;">
+                    <span style="font-size:.78rem; color:var(--text-2);">Por página</span>
+                    <select id="fLimit" style="width:80px;">
+                        <option>25</option><option>50</option><option>100</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+
+        <div class="table-scroll">
+            <table class="pares">
+                <thead>
+                    <tr class="grupo">
+                        <th class="blk-de"   colspan="2">Escola A · INEP 1</th>
+                        <th class="blk-meio" colspan="2">Imagens duplicadas</th>
+                        <th class="blk-para" colspan="2">Escola B · INEP 2</th>
+                        <th class="blk-fp"   rowspan="2">Falso positivo</th>
+                    </tr>
+                    <tr class="cols">
+                        <th style="min-width:210px;">Escola</th>
+                        <th style="min-width:120px;">PDF do RDO</th>
+                        <th style="min-width:150px;">Evidências</th>
+                        <th style="min-width:150px;">Miniaturas</th>
+                        <th style="min-width:210px;">Escola</th>
+                        <th style="min-width:120px;">PDF do RDO</th>
+                    </tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+
+        <div class="pager" id="pager"></div>
+    </section>
+</div>
+
+<!-- lightbox -->
+<div class="lb" id="lb">
+    <button class="fechar" id="lbFechar" aria-label="Fechar">&times;</button>
+    <img id="lbImg" alt="">
+    <div class="cap" id="lbCap"></div>
+</div>
+
+<script src="duplicatas.js"></script>
+</body>
+</html>

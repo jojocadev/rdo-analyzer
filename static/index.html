@@ -16,16 +16,19 @@
         <!-- Header -->
         <header class="header">
             <div class="logo-area">
-                <div class="logo-icon">
-                    <i class="fa-solid fa-images"></i>
+                <div class="marca">
+                    <img src="logo-aprender-conectado.png" alt="Aprender Conectado">
                 </div>
-                <div>
-                    <h1>RDO <span>Image Analyzer</span></h1>
-                    <p class="subtitle">Detecção Inteligente de Imagens Duplicadas em Lotes de PDFs</p>
-                </div>
+                <h1>RDO <span>Image Analyzer</span></h1>
+                <p class="subtitle">Detecção de imagens duplicadas nos RDOs das escolas conectadas</p>
             </div>
-            <div class="status-badge" id="systemStatus">
-                <span class="dot green"></span> Sistema Pronto
+            <div class="actions-area">
+                <a href="/duplicatas" class="btn btn-primary">
+                    <i class="fa-solid fa-table-columns"></i> Painel de Duplicatas
+                </a>
+                <div class="status-badge" id="systemStatus">
+                    <span class="dot green"></span> Sistema Pronto
+                </div>
             </div>
         </header>
 
@@ -34,7 +37,13 @@
             <!-- Input Section -->
             <section class="card input-card">
                 <div class="tabs-header">
-                    <button class="tab-btn active" id="tabSupabaseBtn" onclick="switchTab('supabase')">
+                    <button class="tab-btn active" id="tabFaseBtn" onclick="switchTab('fase')">
+                        <i class="fa-solid fa-layer-group"></i> Análise por Fase
+                    </button>
+                    <button class="tab-btn" id="tabHistoricoBtn" onclick="switchTab('historico')">
+                        <i class="fa-solid fa-clock-rotate-left"></i> Histórico
+                    </button>
+                    <button class="tab-btn" id="tabSupabaseBtn" onclick="switchTab('supabase')">
                         <i class="fa-solid fa-database"></i> Análise por Fornecedor
                     </button>
                     <button class="tab-btn" id="tabDbConsultBtn" onclick="switchTab('dbconsult')">
@@ -51,19 +60,96 @@
                     </button>
                 </div>
 
+                <!-- Tab Análise por Fase -->
+                <div class="tab-content active" id="tabFase">
+                    <div class="folder-scan-form">
+                        <label>Varredura completa de uma Fase (todos os PDFs de todas as escolas)</label>
+                        <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
+                            <i class="fa-solid fa-layer-group input-icon"></i>
+                            <select id="faseSelect" class="sel">
+                                <option value="">Carregando fases...</option>
+                            </select>
+                            <select id="faseSupplierSelect" class="sel-lg">
+                                <option value="">-- Todos os Fornecedores --</option>
+                            </select>
+                            <button class="btn btn-success" id="btnAnalyzeFase" onclick="startFaseScan()">
+                                <i class="fa-solid fa-play"></i> Extrair Imagens Duplicadas
+                            </button>
+                            <button class="btn btn-danger" id="btnCancelFase" onclick="cancelFaseScan()" style="display:none;">
+                                <i class="fa-solid fa-stop"></i> Cancelar
+                            </button>
+                        </div>
+
+                        <div class="input-group" style="flex-wrap:wrap; gap:1.2rem; margin-top:0.8rem; align-items:center;">
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0; cursor:pointer;">
+                                <input type="checkbox" id="faseMesmoFornecedor" checked style="width:16px; height:16px; cursor:pointer;">
+                                Só INEPs diferentes do <strong>mesmo fornecedor</strong>
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0; cursor:pointer;"
+                                   title="Sem isso, o pHash encadeia imagens diferentes que apenas se parecem (ex.: 1.206 heatmaps distintos do UniFi viram um grupo de 754 escolas).">
+                                <input type="checkbox" id="faseSomenteIdenticas" checked style="width:16px; height:16px; cursor:pointer;">
+                                Só imagens <strong>100% idênticas</strong> (SHA-256)
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0; cursor:pointer;"
+                                   title="Descarta imagens que aparecem em escolas de fornecedores diferentes — logo da EACE, página Aviso de desativação etc.">
+                                <input type="checkbox" id="faseIgnorarTemplates" checked style="width:16px; height:16px; cursor:pointer;">
+                                Ignorar <strong>templates do sistema</strong>
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0; cursor:pointer;">
+                                <input type="checkbox" id="faseGravarSupabase" checked style="width:16px; height:16px; cursor:pointer;">
+                                Gravar resultado no Supabase
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0;">
+                                Downloads simultâneos:
+                                <input type="number" id="faseWorkers" value="32" min="4" max="96" class="inp-sm">
+                            </label>
+                            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; margin:0;">
+                                Amostra (0 = todas):
+                                <input type="number" id="faseAmostra" value="0" min="0" class="inp-sm">
+                            </label>
+                        </div>
+
+                        <p class="help-text">
+                            <i class="fa-solid fa-circle-info"></i>
+                            Escolha a fase (ex.: <strong>5</strong>) e deixe <strong>Todos os Fornecedores</strong> para varrer a fase inteira.
+                            O sistema baixa cada PDF, extrai as fotos, compara por SHA-256 e pHash e agrupa as imagens repetidas entre escolas diferentes.
+                        </p>
+                        <div class="aviso aviso-ok">
+                            <i class="fa-solid fa-floppy-disk"></i>
+                            O resultado é <strong>salvo automaticamente no Histórico</strong> em disco. Pode fechar a aba ou reiniciar o servidor: nada se perde.
+                            Se cancelar no meio, os PDFs já baixados ficam em cache e a próxima execução retoma de onde parou.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Histórico -->
+                <div class="tab-content" id="tabHistorico">
+                    <div class="folder-scan-form">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                            <label style="margin:0;">Execuções salvas — clique para reabrir o resultado visual</label>
+                            <button class="btn btn-primary" onclick="loadHistorico()">
+                                <i class="fa-solid fa-rotate"></i> Atualizar
+                            </button>
+                        </div>
+                        <div id="historicoList" style="margin-top:1rem;">
+                            <p class="help-text"><i class="fa-solid fa-spinner fa-spin"></i> Carregando histórico...</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Tab Supabase -->
-                <div class="tab-content active" id="tabSupabase">
+                <div class="tab-content" id="tabSupabase">
                     <div class="folder-scan-form">
                         <label for="supplierSelect">Selecione o Fornecedor para Verificar Duplicatas:</label>
                         <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
                             <i class="fa-solid fa-building input-icon"></i>
-                            <select id="supplierSelect" style="flex:1; min-width:260px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;">
+                            <select id="supplierSelect" class="sel-lg">
                                 <option value="">Carregando fornecedores...</option>
                             </select>
                             <button class="btn btn-primary" id="btnAnalyzeSupplier" onclick="startSupabaseSupplierScan()">
                                 <i class="fa-solid fa-magnifying-glass"></i> Analisar Fornecedor
                             </button>
-                            <button class="btn btn-success" id="btnAnalyzeAll" onclick="startAllSuppliersSequential()" style="background: linear-gradient(135deg, #7c3aed, #4f46e5); border-color: #7c3aed;">
+                            <button class="btn btn-success" id="btnAnalyzeAll" onclick="startAllSuppliersSequential()">
                                 <i class="fa-solid fa-layer-group"></i> Analisar Todos os Fornecedores
                             </button>
                         </div>
@@ -72,7 +158,7 @@
                             Selecione um fornecedor e clique em <strong>Analisar Fornecedor</strong> para análise individual.
                             Ou clique em <strong>Analisar Todos os Fornecedores</strong> para processar todos em sequência e ver o resultado unificado.
                         </p>
-                        <div style="margin-top:0.8rem; padding: 0.8rem 1rem; background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.3); border-radius: 8px; font-size: 0.85rem; color: #fbbf24;">
+                        <div class="aviso aviso-atencao">
                             <i class="fa-solid fa-triangle-exclamation"></i>
                             <strong>Analisar todos os fornecedores</strong> processa cada um em sequência e pode levar <strong>várias horas</strong> dependendo da quantidade de PDFs. Mantenha a janela aberta.
                         </div>
@@ -85,7 +171,7 @@
                         <label for="dbSupplierSelect">Filtrar Duplicatas Gravadas por Fornecedor:</label>
                         <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
                             <i class="fa-solid fa-filter input-icon"></i>
-                            <select id="dbSupplierSelect" style="flex:1; min-width:260px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadDbDuplicates(1)">
+                            <select id="dbSupplierSelect" class="sel-lg" onchange="loadDbDuplicates(1)">
                                 <option value="">-- Todos os Fornecedores --</option>
                             </select>
                             <button class="btn btn-primary" onclick="loadDbDuplicates(1)">
@@ -104,10 +190,10 @@
                         <label>Filtrar Todos os PDFs Registrados na Base:</label>
                         <div class="input-group" style="flex-wrap: wrap; gap: 0.8rem;">
                             <i class="fa-solid fa-filter input-icon"></i>
-                            <select id="analisadosSupplierSelect" style="flex:1; min-width:220px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadAllAnalisados(1)">
+                            <select id="analisadosSupplierSelect" class="sel-lg" onchange="loadAllAnalisados(1)">
                                 <option value="">-- Todos os Fornecedores --</option>
                             </select>
-                            <select id="analisadosDupSelect" style="width:200px; background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding: 0.7rem 1rem; font-size:0.95rem;" onchange="loadAllAnalisados(1)">
+                            <select id="analisadosDupSelect" class="sel" onchange="loadAllAnalisados(1)">
                                 <option value="">-- Status de Duplicata --</option>
                                 <option value="true">⚠️ Com Duplicata (Sim)</option>
                                 <option value="false">✅ Sem Duplicata (Não)</option>
@@ -123,7 +209,7 @@
                 </div>
 
                 <!-- Tab Upload -->
-                <div class="tab-content active" id="tabUpload">
+                <div class="tab-content" id="tabUpload">
                     <div class="dropzone" id="dropzone">
                         <i class="fa-solid fa-file-pdf drop-icon"></i>
                         <h3>Arraste seus arquivos PDF aqui</h3>
@@ -150,6 +236,132 @@
                             <i class="fa-solid fa-circle-info"></i> Processa diretamente os PDFs no disco sem precisar fazer upload via navegador.
                         </p>
                     </div>
+                </div>
+            </section>
+
+            <!-- Progresso da Análise por Fase -->
+            <section class="card progress-card" id="faseProgressCard" style="display: none;">
+                <div class="progress-header">
+                    <h3><i class="fa-solid fa-spinner fa-spin"></i> <span id="faseProgressTitle">Analisando fase...</span></h3>
+                    <span class="progress-percentage" id="faseProgressPct">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="faseProgressBar" style="width: 0%;"></div>
+                </div>
+                <div class="current-status-text" id="faseProgressMsg">Iniciando...</div>
+                <div class="stats-grid-mini">
+                    <div class="mini-stat">
+                        <span class="label">Etapa</span>
+                        <span class="value" id="faseStatEtapa">—</span>
+                    </div>
+                    <div class="mini-stat">
+                        <span class="label">Tempo Decorrido</span>
+                        <span class="value" id="faseStatTime">0.0s</span>
+                    </div>
+                    <div class="mini-stat">
+                        <span class="label">Execução</span>
+                        <span class="value" id="faseStatRunId" style="font-size:0.75rem;">—</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Resultado Visual da Análise por Fase -->
+            <section class="results-section" id="faseResultsSection" style="display: none;">
+                <div class="card" style="margin-bottom:1.2rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                        <div>
+                            <h3 style="margin:0;">
+                                <i class="fa-solid fa-images text-warning"></i>
+                                Imagens Duplicadas — <span id="faseResultTitle" style="color:var(--accent);">—</span>
+                            </h3>
+                            <p class="subtitle" style="margin:0.35rem 0 0;" id="faseResultSubtitle">—</p>
+                        </div>
+                        <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
+                            <a href="/duplicatas" class="btn btn-primary">
+                                <i class="fa-solid fa-table-columns"></i> Abrir no Painel de Duplicatas
+                            </a>
+                            <button class="btn btn-primary" onclick="downloadFaseZip()">
+                                <i class="fa-solid fa-file-zipper"></i> Baixar Imagens (ZIP)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metrics-grid" id="faseMetricsGrid"></div>
+
+                <!-- Sub-abas do resultado -->
+                <div class="card" style="padding:0.6rem; margin-bottom:1rem;">
+                    <div class="tabs-header" style="margin:0; border:none;">
+                        <button class="tab-btn active" id="faseViewAnalisadosBtn" onclick="switchFaseView('analisados')">
+                            <i class="fa-solid fa-list-check"></i> Todos os PDFs Analisados
+                        </button>
+                        <button class="tab-btn" id="faseViewGruposBtn" onclick="switchFaseView('grupos')">
+                            <i class="fa-solid fa-object-group"></i> Grupos de Duplicatas
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Visão 1: tabela de todos os PDFs analisados desta execução -->
+                <div class="card table-card" id="faseViewAnalisados">
+                    <div class="table-header-controls">
+                        <h3 style="margin:0;">
+                            <i class="fa-solid fa-list-check"></i>
+                            PDFs Analisados <span id="faseAnalisadosCount" class="badge">0</span>
+                        </h3>
+                        <div class="filters" style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center;">
+                            <input type="text" id="faseAnalisadosBusca" placeholder="Buscar INEP, UF, fornecedor ou PDF..."
+                                   onkeydown="if(event.key==='Enter') loadFaseAnalisados(1)" class="sel">
+                            <select id="faseAnalisadosDup" onchange="loadFaseAnalisados(1)" class="sel">
+                                <option value="">-- Status de Duplicata --</option>
+                                <option value="true">⚠️ Com Duplicata (Sim)</option>
+                                <option value="false">✅ Sem Duplicata (Não)</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadFaseAnalisados(1)">
+                                <i class="fa-solid fa-filter"></i> Filtrar
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Escola / Fornecedor</th>
+                                    <th>Imagem</th>
+                                    <th style="text-align:center;">Duplicata</th>
+                                    <th>Duplicada com (outro INEP)</th>
+                                    <th>PDF do RDO</th>
+                                    <th style="text-align:center;">Grupos</th>
+                                </tr>
+                            </thead>
+                            <tbody id="faseAnalisadosBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="faseAnalisadosPagination" style="display:flex; justify-content:center; gap:0.6rem; padding:1rem; flex-wrap:wrap;"></div>
+                </div>
+
+                <!-- Visão 2: grupos de duplicatas com as fotos lado a lado -->
+                <div class="card table-card" id="faseViewGrupos" style="display:none;">
+                    <div class="table-header-controls">
+                        <h3 style="margin:0;">
+                            <i class="fa-solid fa-object-group"></i>
+                            Grupos de Duplicatas <span id="faseGroupCount" class="badge">0</span>
+                        </h3>
+                        <div class="filters" style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center;">
+                            <input type="text" id="faseBusca" placeholder="Buscar INEP, UF ou fornecedor..."
+                                   onkeydown="if(event.key==='Enter') loadFaseGroups(1)" class="sel">
+                            <select id="faseMinEscolas" onchange="loadFaseGroups(1)" class="sel">
+                                <option value="0">Todos os grupos</option>
+                                <option value="3">3+ escolas envolvidas</option>
+                                <option value="5">5+ escolas envolvidas</option>
+                                <option value="10">10+ escolas envolvidas</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadFaseGroups(1)">
+                                <i class="fa-solid fa-filter"></i> Filtrar
+                            </button>
+                        </div>
+                    </div>
+                    <div id="faseGroupsContainer"></div>
+                    <div id="fasePagination" style="display:flex; justify-content:center; gap:0.6rem; padding:1rem; flex-wrap:wrap;"></div>
                 </div>
             </section>
 
@@ -362,5 +574,6 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="fase.js"></script>
 </body>
 </html>

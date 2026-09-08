@@ -11,14 +11,14 @@ from PIL import Image
 import imagehash
 import pandas as pd
 
-SUPABASE_URL = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1"
-SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
-
+from config import SUPABASE_URL, SERVICE_KEY  # noqa: E402
 class SupabaseRDOAnalyzer:
-    def __init__(self, min_width: int = 120, min_height: int = 120, phash_threshold: int = 8, cache_dir: str = None):
+    def __init__(self, min_width: int = 120, min_height: int = 120, phash_threshold: int = 8, cache_dir: str = None, table_analisados: str = "rdo_analisados", table_duplicates: str = "duplicatas_rdo"):
         self.min_width = min_width
         self.min_height = min_height
         self.phash_threshold = phash_threshold
+        self.table_analisados = table_analisados
+        self.table_duplicates = table_duplicates
         self.cache_dir = cache_dir or os.path.join(os.path.dirname(__file__), "extracted_images")
         os.makedirs(self.cache_dir, exist_ok=True)
         
@@ -55,102 +55,122 @@ class SupabaseRDOAnalyzer:
             print(f"Erro ao buscar escolas no Supabase: {e}")
             return []
 
-    def process_school_pdfs(self, school_records: List[Dict[str, Any]], progress_callback=None) -> int:
-        """Baixa os PDFs das escolas e extrai todas as imagens válidas."""
-        total_schools = len(school_records)
-        
-        for idx, school in enumerate(school_records):
-            if progress_callback:
-                progress_callback(idx + 1, total_schools, school.get("fornecedor", ""))
+    def _process_single_school(self, school: Dict[str, Any], idx: int) -> List[Dict[str, Any]]:
+        """Processa os PDFs de uma única escola e retorna a lista de imagens válidas extraídas."""
+        inep = school.get("inep")
+        uf = school.get("uf")
+        fornecedor = school.get("fornecedor")
+        tipo_fornecedor = school.get("tipo_fornecedor")
+        fase = school.get("fase")
+        books = school.get("books") or []
 
-            inep = school.get("inep")
-            uf = school.get("uf")
-            fornecedor = school.get("fornecedor")
-            tipo_fornecedor = school.get("tipo_fornecedor")
-            fase = school.get("fase")
-            books = school.get("books") or []
+        if isinstance(books, str):
+            try:
+                books = json.loads(books)
+            except Exception:
+                books = [books]
 
-            if isinstance(books, str):
-                try:
-                    books = json.loads(books)
-                except Exception:
-                    books = [books]
+        school_images = []
+        for pdf_idx, pdf_url in enumerate(books):
+            if not pdf_url or not isinstance(pdf_url, str):
+                continue
 
-            for pdf_idx, pdf_url in enumerate(books):
-                if not pdf_url or not isinstance(pdf_url, str):
-                    continue
+            clean_url = "https:" + pdf_url if pdf_url.startswith("//") else pdf_url
+            pdf_filename = clean_url.split("/")[-1].split("?")[0]
+            unquoted_filename = urllib.parse.unquote(pdf_filename)
 
-                clean_url = "https:" + pdf_url if pdf_url.startswith("//") else pdf_url
-                pdf_filename = clean_url.split("/")[-1].split("?")[0]
-                unquoted_filename = urllib.parse.unquote(pdf_filename)
+            try:
+                req = urllib.request.Request(clean_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    pdf_bytes = resp.read()
 
-                try:
-                    req = urllib.request.Request(clean_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=15) as resp:
-                        pdf_bytes = resp.read()
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                for page_index in range(len(doc)):
+                    page = doc[page_index]
+                    image_list = page.get_images(full=True)
 
-                    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                    for page_index in range(len(doc)):
-                        page = doc[page_index]
-                        image_list = page.get_images(full=True)
+                    for img_idx, img_info in enumerate(image_list):
+                        xref = img_info[0]
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
 
-                        for img_idx, img_info in enumerate(image_list):
-                            xref = img_info[0]
-                            base_image = doc.extract_image(xref)
-                            image_bytes = base_image["image"]
-                            image_ext = base_image["ext"]
+                        try:
+                            pil_img = Image.open(io.BytesIO(image_bytes))
+                            width, height = pil_img.size
 
-                            try:
-                                pil_img = Image.open(io.BytesIO(image_bytes))
-                                width, height = pil_img.size
-
-                                if width < self.min_width or height < self.min_height:
-                                    continue
-
-                                pil_img_rgb = pil_img.convert("RGB") if pil_img.mode not in ("RGB", "L") else pil_img
-
-                                # Ignorar imagens totalmente brancas/uniformes (templates em branco)
-                                sha256 = hashlib.sha256(image_bytes).hexdigest()
-                                if sha256 == "90cb2766e81912dd996d8387e2406a32e333836543dd88fc1845aa188e5bdce4":
-                                    continue
-
-                                extrema = pil_img_rgb.getextrema()
-                                if extrema and all(r[0] == r[1] for r in extrema):
-                                    continue  # Imagem de cor única 100% sólida/branca
-
-                                phash_val = str(imagehash.phash(pil_img_rgb))
-
-                                thumb_filename = f"{sha256[:16]}_{page_index+1}_{img_idx}.jpg"
-                                thumb_path = os.path.join(self.cache_dir, thumb_filename)
-                                if not os.path.exists(thumb_path):
-                                    pil_img_rgb.save(thumb_path, "JPEG", quality=85)
-
-                                img_record = {
-                                    "id": f"{inep or idx}_p{page_index+1}_i{img_idx}",
-                                    "escola_id_bubble": school.get("escola_id_bubble"),
-                                    "inep": int(inep) if inep else None,
-                                    "uf": str(uf) if uf else None,
-                                    "fornecedor": str(fornecedor) if fornecedor else "Não informado",
-                                    "tipo_fornecedor": str(tipo_fornecedor) if tipo_fornecedor else None,
-                                    "fase": str(fase) if fase else None,
-                                    "pdf_url": clean_url,
-                                    "pdf_filename": unquoted_filename,
-                                    "page": int(page_index + 1),
-                                    "width": int(width),
-                                    "height": int(height),
-                                    "sha256": str(sha256),
-                                    "phash": str(phash_val),
-                                    "thumb_filename": thumb_filename
-                                }
-
-                                self.extracted_images.append(img_record)
-
-                            except Exception as e:
+                            if width < self.min_width or height < self.min_height:
                                 continue
-                    doc.close()
+
+                            pil_img_rgb = pil_img.convert("RGB") if pil_img.mode not in ("RGB", "L") else pil_img
+
+                            sha256 = hashlib.sha256(image_bytes).hexdigest()
+                            if sha256 == "90cb2766e81912dd996d8387e2406a32e333836543dd88fc1845aa188e5bdce4":
+                                continue
+
+                            extrema = pil_img_rgb.getextrema()
+                            if extrema and all(r[0] == r[1] for r in extrema):
+                                continue
+
+                            phash_val = str(imagehash.phash(pil_img_rgb))
+
+                            thumb_filename = f"{sha256[:16]}_{page_index+1}_{img_idx}.jpg"
+                            thumb_path = os.path.join(self.cache_dir, thumb_filename)
+                            if not os.path.exists(thumb_path):
+                                pil_img_rgb.save(thumb_path, "JPEG", quality=85)
+
+                            img_record = {
+                                "id": f"{inep or idx}_p{page_index+1}_i{img_idx}",
+                                "escola_id_bubble": school.get("escola_id_bubble"),
+                                "inep": int(inep) if inep else None,
+                                "uf": str(uf) if uf else None,
+                                "fornecedor": str(fornecedor) if fornecedor else "Não informado",
+                                "tipo_fornecedor": str(tipo_fornecedor) if tipo_fornecedor else None,
+                                "fase": str(fase) if fase else None,
+                                "pdf_url": clean_url,
+                                "pdf_filename": unquoted_filename,
+                                "page": int(page_index + 1),
+                                "width": int(width),
+                                "height": int(height),
+                                "sha256": str(sha256),
+                                "phash": str(phash_val),
+                                "thumb_filename": thumb_filename
+                            }
+
+                            school_images.append(img_record)
+
+                        except Exception:
+                            continue
+                doc.close()
+            except Exception as e:
+                continue
+
+        return school_images
+
+    def process_school_pdfs(self, school_records: List[Dict[str, Any]], progress_callback=None, max_workers: int = 32) -> int:
+        """Baixa os PDFs das escolas em PARALELO (Multi-Threading 32 Workers) e extrai todas as imagens válidas."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        total_schools = len(school_records)
+        completed_schools = 0
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_school = {
+                executor.submit(self._process_single_school, school, idx): (idx, school)
+                for idx, school in enumerate(school_records)
+            }
+
+            for future in as_completed(future_to_school):
+                completed_schools += 1
+                if progress_callback:
+                    idx, school = future_to_school[future]
+                    progress_callback(completed_schools, total_schools, school.get("fornecedor", ""))
+
+                try:
+                    imgs = future.result()
+                    if imgs:
+                        self.extracted_images.extend(imgs)
                 except Exception as e:
-                    print(f"Erro ao baixar/processar PDF {clean_url}: {e}")
-                    continue
+                    print(f"Erro ao processar escola: {e}")
 
         return len(self.extracted_images)
 
@@ -203,38 +223,50 @@ class SupabaseRDOAnalyzer:
                                     "imgB": imgB
                                 })
 
-        # 2. Duplicatas Visuais (pHash)
+        # 2. Duplicatas Visuais (pHash - Otimizado com Vetorização NumPy)
         unique_sha_imgs = [img_list[0] for img_list in sha_map.values()]
         visual_pairs = []
-        hash_objects = [imagehash.hex_to_hash(img["phash"]) for img in unique_sha_imgs]
-
         num_unique = len(unique_sha_imgs)
-        for i in range(num_unique):
-            hashA = hash_objects[i]
-            imgA_rep = unique_sha_imgs[i]
-            
-            for j in range(i + 1, num_unique):
-                hashB = hash_objects[j]
-                distance = int(hashA - hashB)
-                
-                if distance <= self.phash_threshold:
-                    similarity = float(max(0.0, round((1.0 - (distance / 64.0)) * 100, 1)))
-                    membersA = sha_map[imgA_rep["sha256"]]
-                    membersB = sha_map[unique_sha_imgs[j]["sha256"]]
-                    
-                    for itemA in membersA:
-                        for itemB in membersB:
-                            # CRITÉRIO: só flagrar se INEPs forem diferentes
-                            inep_a = itemA.get("inep")
-                            inep_b = itemB.get("inep")
-                            if inep_a != inep_b:
-                                visual_pairs.append({
-                                    "type": "Visual (Perceptual)",
-                                    "similarity": similarity,
-                                    "distance": distance,
-                                    "imgA": itemA,
-                                    "imgB": itemB
-                                })
+
+        if num_unique >= 2:
+            import numpy as np
+            uint_hashes = np.array([int(img["phash"], 16) for img in unique_sha_imgs], dtype=np.uint64)
+            matrix_diff = np.bitwise_xor.outer(uint_hashes, uint_hashes)
+
+            # Popcount vetorizado para uint64 (Contagem de bits alterados)
+            arr = matrix_diff
+            arr = arr - ((arr >> np.uint64(1)) & np.uint64(0x5555555555555555))
+            arr = (arr & np.uint64(0x3333333333333333)) + ((arr >> np.uint64(2)) & np.uint64(0x3333333333333333))
+            arr = (arr + (arr >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
+            distances = (arr * np.uint64(0x0101010101010101)) >> np.uint64(56)
+
+            # Apenas o triângulo superior (i < j) para nunca repetir pares
+            tri_i, tri_j = np.triu_indices(num_unique, k=1)
+            match_mask = distances[tri_i, tri_j] <= self.phash_threshold
+            matched_i = tri_i[match_mask]
+            matched_j = tri_j[match_mask]
+
+            for idx in range(len(matched_i)):
+                i = matched_i[idx]
+                j = matched_j[idx]
+                dist = int(distances[i, j])
+                sim = float(max(0.0, round((1.0 - (dist / 64.0)) * 100, 1)))
+
+                membersA = sha_map[unique_sha_imgs[i]["sha256"]]
+                membersB = sha_map[unique_sha_imgs[j]["sha256"]]
+
+                for itemA in membersA:
+                    for itemB in membersB:
+                        inep_a = itemA.get("inep")
+                        inep_b = itemB.get("inep")
+                        if inep_a and inep_b and inep_a != inep_b:
+                            visual_pairs.append({
+                                "type": "Visual (Perceptual)",
+                                "similarity": sim,
+                                "distance": dist,
+                                "imgA": itemA,
+                                "imgB": itemB
+                            })
 
         all_pairs = exact_pairs + visual_pairs
         all_pairs.sort(key=lambda x: x["similarity"], reverse=True)
@@ -346,11 +378,12 @@ class SupabaseRDOAnalyzer:
 
         return result
 
-    def save_analisados_to_supabase(self, duplicate_ids: set, duplicate_hashes: set):
-        """Salva todos os PDFs/imagens analisados na tabela rdo_analisados do Supabase."""
+    def save_analisados_to_supabase(self, duplicate_ids: set, duplicate_hashes: set, table_name: str = None):
+        """Salva todos os PDFs/imagens analisados na tabela rdo_analisados (ou rdo_analisados_test) do Supabase."""
         if not self.extracted_images:
             return
 
+        target_table = table_name or self.table_analisados
         records = []
         for img in self.extracted_images:
             img_id = img.get("id")
@@ -373,7 +406,7 @@ class SupabaseRDOAnalyzer:
         for b in range(0, len(records), batch_size):
             batch = records[b:b+batch_size]
             try:
-                url = f"{SUPABASE_URL}/rdo_analisados"
+                url = f"{SUPABASE_URL}/{target_table}"
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(batch).encode("utf-8"),
@@ -385,15 +418,16 @@ class SupabaseRDOAnalyzer:
                     method="POST"
                 )
                 with urllib.request.urlopen(req) as resp:
-                    print(f"[Supabase Persist] Lote de {len(batch)} registros salvos na tabela rdo_analisados!")
+                    print(f"[Supabase Persist] Lote de {len(batch)} registros salvos na tabela {target_table}!")
             except Exception as e:
-                print(f"[Supabase Persist Error] Falha ao salvar em rdo_analisados: {e}")
+                print(f"[Supabase Persist Error] Falha ao salvar em {target_table}: {e}")
 
-    def save_duplicates_to_supabase(self, pairs: List[Dict[str, Any]]):
-        """Salva os pares de duplicatas diretamente na tabela duplicatas_rdo do Supabase."""
+    def save_duplicates_to_supabase(self, pairs: List[Dict[str, Any]], table_name: str = None):
+        """Salva os pares de duplicatas diretamente na tabela duplicatas_rdo (ou duplicatas_rdo_test) do Supabase."""
         if not pairs:
             return
 
+        target_table = table_name or self.table_duplicates
         records = []
         for p in pairs:
             imgA = p.get("imgA", {})
@@ -403,13 +437,11 @@ class SupabaseRDOAnalyzer:
                 "uf_a": imgA.get("uf"),
                 "fornecedor_a": imgA.get("fornecedor"),
                 "pdf_filename_a": imgA.get("pdf_filename"),
-                "pdf_url_a": imgA.get("pdf_url"),
                 "pagina_a": imgA.get("page"),
                 "inep_b": imgB.get("inep"),
                 "uf_b": imgB.get("uf"),
                 "fornecedor_b": imgB.get("fornecedor"),
                 "pdf_filename_b": imgB.get("pdf_filename"),
-                "pdf_url_b": imgB.get("pdf_url"),
                 "pagina_b": imgB.get("page"),
                 "tipo_duplicata": p.get("type"),
                 "similaridade": p.get("similarity"),
@@ -423,7 +455,7 @@ class SupabaseRDOAnalyzer:
         for b in range(0, len(records), batch_size):
             batch = records[b:b+batch_size]
             try:
-                url = f"{SUPABASE_URL}/duplicatas_rdo"
+                url = f"{SUPABASE_URL}/{target_table}"
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(batch).encode("utf-8"),
@@ -435,9 +467,9 @@ class SupabaseRDOAnalyzer:
                     method="POST"
                 )
                 with urllib.request.urlopen(req) as resp:
-                    print(f"[Supabase Persist] Lote de {len(batch)} duplicatas salvas na tabela duplicatas_rdo!")
+                    print(f"[Supabase Persist] Lote de {len(batch)} duplicatas salvas na tabela {target_table}!")
             except Exception as e:
-                print(f"[Supabase Persist Error] Falha ao salvar lote de duplicatas: {e}")
+                print(f"[Supabase Persist Error] Falha ao salvar lote de duplicatas em {target_table}: {e}")
 
 
     def generate_excel_report(self, output_path: str) -> str:

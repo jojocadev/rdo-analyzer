@@ -35,6 +35,8 @@ async function loadSuppliers() {
         if (dbSelect) dbSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
         const anSelect = document.getElementById('analisadosSupplierSelect');
         if (anSelect) anSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
+        const faseSelect = document.getElementById('faseSupplierSelect');
+        if (faseSelect) faseSelect.innerHTML = '<option value="">-- Todos os Fornecedores --</option>';
 
         suppliers.forEach(name => {
             const opt = document.createElement('option');
@@ -54,6 +56,12 @@ async function loadSuppliers() {
                 optAn.textContent = name;
                 anSelect.appendChild(optAn);
             }
+            if (faseSelect) {
+                const optFase = document.createElement('option');
+                optFase.value = name;
+                optFase.textContent = name;
+                faseSelect.appendChild(optFase);
+            }
         });
     } catch(e) {
         console.error("Erro ao carregar fornecedores:", e);
@@ -67,7 +75,14 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
-    if (tabName === 'supabase') {
+    if (tabName === 'fase') {
+        document.getElementById('tabFaseBtn').classList.add('active');
+        document.getElementById('tabFase').classList.add('active');
+    } else if (tabName === 'historico') {
+        document.getElementById('tabHistoricoBtn').classList.add('active');
+        document.getElementById('tabHistorico').classList.add('active');
+        loadHistorico();
+    } else if (tabName === 'supabase') {
         document.getElementById('tabSupabaseBtn').classList.add('active');
         document.getElementById('tabSupabase').classList.add('active');
     } else if (tabName === 'dbconsult') {
@@ -548,7 +563,7 @@ function renderTable(pairs) {
 
     if (!pairs || pairs.length === 0) {
         tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
-            <i class="fa-solid fa-check-circle" style="color: #22c55e; font-size: 1.5rem;"></i><br><br>
+            <i class="fa-solid fa-check-circle" style="color: var(--success); font-size: 1.5rem;"></i><br><br>
             Nenhuma imagem duplicada encontrada entre INEPs diferentes.
         </td></tr>`;
         return;
@@ -567,7 +582,7 @@ function renderTable(pairs) {
                     ${imgA.inep || '—'}
                 </div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
-                    ${imgA.uf ? `<span class="badge" style="background:rgba(59,130,246,0.2);">${imgA.uf}</span> ` : ''}
+                    ${imgA.uf ? `<span class="badge" style="background:var(--primary-soft);">${imgA.uf}</span> ` : ''}
                     ${imgA.fornecedor ? `<span style="font-size:0.73rem;">${imgA.fornecedor.replace(/ \(RI\)| \(RE\)/g, '')}</span>` : ''}
                 </div>
                 <div style="font-size:0.72rem; color: var(--text-muted); margin-top:0.1rem;">Pág. ${imgA.page}</div>
@@ -580,11 +595,11 @@ function renderTable(pairs) {
                 <small style="color: var(--text-muted); font-size:0.72rem;">${pair.type === 'Exata (100%)' ? '🔴 Exata' : '🟡 Visual'}</small>
             </td>
             <td>
-                <div style="font-size: 1rem; font-weight: 700; color: #f87171;">
+                <div style="font-size: 1rem; font-weight: 700; color: var(--danger);">
                     ${imgB.inep || '—'}
                 </div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">
-                    ${imgB.uf ? `<span class="badge" style="background:rgba(59,130,246,0.2);">${imgB.uf}</span> ` : ''}
+                    ${imgB.uf ? `<span class="badge" style="background:var(--primary-soft);">${imgB.uf}</span> ` : ''}
                     ${imgB.fornecedor ? `<span style="font-size:0.73rem;">${imgB.fornecedor.replace(/ \(RI\)| \(RE\)/g, '')}</span>` : ''}
                 </div>
                 <div style="font-size:0.72rem; color: var(--text-muted); margin-top:0.1rem;">Pág. ${imgB.page}</div>

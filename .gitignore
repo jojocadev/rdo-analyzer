@@ -15,5 +15,20 @@ extracted_images/
 uploads/
 reports/*.xlsx
 
-# Configurações do ambiente
+
+# Analise por fase: cache de download, historico de execucoes e ZIPs
+cache_extracao/
+historico/
+
+# Backups pontuais antes de mudancas grandes
+backup_*/
+
+# Credenciais (a service_role do Supabase NUNCA vai para o repositorio)
 .env
+.env.local
+
+# Bases de escolas exportadas do Bubble: 54 MB de CSV, dado de producao
+Banco de Escolas/
+
+# Backups do Supabase gerados antes de cada atualizacao de base
+backup_fase5_supabase_*.json

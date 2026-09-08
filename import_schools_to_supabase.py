@@ -8,9 +8,7 @@ import pandas as pd
 import dateutil.parser
 
 CSV_PATH = r"c:\Projetos AI\Sisop\RDO images\Banco de Escolas\Correta.csv"
-SUPABASE_URL = "https://jclwfskzstjwmfskbanz.supabase.co/rest/v1/escolas_conectadas?on_conflict=escola_id_bubble"
-SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjbHdmc2t6c3Rqd21mc2tiYW56Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTgzNzQ1NSwiZXhwIjoyMTAxNDEzNDU1fQ.B6PzIbTON-AToumtXbCwcrmPlJwMZhrCekrXRkbKZMU"
-
+from config import SUPABASE_URL, SERVICE_KEY  # noqa: E402
 def parse_date(val):
     if not val or pd.isna(val) or str(val).strip().lower() == 'nan':
         return None

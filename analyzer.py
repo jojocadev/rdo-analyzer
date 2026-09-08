@@ -143,43 +143,50 @@ class RDOImageAnalyzer:
                                 "imgB": imgB
                             })
 
-        # 2. Comparação Perceptual (pHash) para Duplicatas Visuais (Redimensionadas, comprimidas)
+        # 2. Comparação Perceptual (pHash) para Duplicatas Visuais (Vetorizada com NumPy)
         unique_sha_imgs = [img_list[0] for img_list in sha_map.values()]
         visual_pairs = []
-        
-        # Converter phashes para objetos imagehash
-        hash_objects = [imagehash.hex_to_hash(img["phash"]) for img in unique_sha_imgs]
-
         num_unique = len(unique_sha_imgs)
-        for i in range(num_unique):
-            if progress_callback and i % 50 == 0:
-                progress_callback(i, num_unique)
-                
-            hashA = hash_objects[i]
-            imgA_rep = unique_sha_imgs[i]
-            
-            for j in range(i + 1, num_unique):
-                hashB = hash_objects[j]
-                distance = int(hashA - hashB)  # Converter numpy.int64 -> Python int
-                
-                if distance <= self.phash_threshold:
-                    # Similaridade percentual aproximada (64 bits no pHash)
-                    similarity = float(max(0.0, round((1.0 - (distance / 64.0)) * 100, 1)))
-                    
-                    # Expandir todos os membros do grupo SHA de A contra o grupo SHA de B
-                    membersA = sha_map[imgA_rep["sha256"]]
-                    membersB = sha_map[unique_sha_imgs[j]["sha256"]]
-                    
-                    for itemA in membersA:
-                        for itemB in membersB:
-                            if itemA["filename"] != itemB["filename"]:
-                                visual_pairs.append({
-                                    "type": "Visual (Perceptual)",
-                                    "similarity": similarity,
-                                    "distance": distance,
-                                    "imgA": itemA,
-                                    "imgB": itemB
-                                })
+
+        if num_unique >= 2:
+            import numpy as np
+            uint_hashes = np.array([int(img["phash"], 16) for img in unique_sha_imgs], dtype=np.uint64)
+            matrix_diff = np.bitwise_xor.outer(uint_hashes, uint_hashes)
+
+            # Popcount vetorizado para uint64 (Contagem de bits alterados)
+            arr = matrix_diff
+            arr = arr - ((arr >> np.uint64(1)) & np.uint64(0x5555555555555555))
+            arr = (arr & np.uint64(0x3333333333333333)) + ((arr >> np.uint64(2)) & np.uint64(0x3333333333333333))
+            arr = (arr + (arr >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
+            distances = (arr * np.uint64(0x0101010101010101)) >> np.uint64(56)
+
+            # Apenas o triângulo superior (i < j) para eliminar comparações repetidas
+            tri_i, tri_j = np.triu_indices(num_unique, k=1)
+            match_mask = distances[tri_i, tri_j] <= self.phash_threshold
+            matched_i = tri_i[match_mask]
+            matched_j = tri_j[match_mask]
+
+            for idx in range(len(matched_i)):
+                i = matched_i[idx]
+                j = matched_j[idx]
+                dist = int(distances[i, j])
+                sim = float(max(0.0, round((1.0 - (dist / 64.0)) * 100, 1)))
+
+                membersA = sha_map[unique_sha_imgs[i]["sha256"]]
+                membersB = sha_map[unique_sha_imgs[j]["sha256"]]
+
+                for itemA in membersA:
+                    for itemB in membersB:
+                        filename_a = itemA.get("filename") or itemA.get("pdf_filename")
+                        filename_b = itemB.get("filename") or itemB.get("pdf_filename")
+                        if filename_a and filename_b and filename_a != filename_b:
+                            visual_pairs.append({
+                                "type": "Visual (Perceptual)",
+                                "similarity": sim,
+                                "distance": dist,
+                                "imgA": itemA,
+                                "imgB": itemB
+                            })
 
         # Combinar todos os pares
         all_pairs = exact_pairs + visual_pairs
