@@ -337,6 +337,51 @@ def _e_foto(r):
     return abs(razao - 4 / 3) < 0.02 or abs(razao - 3 / 4) < 0.02
 
 
+def dir_cache(run_id="", fase="5"):
+    """
+    Pasta de cache de uma execucao.
+
+    O run_id (`fase5_todos_20260902_090330`) ja carrega o nome da pasta nos seus
+    primeiros campos; sem ele, cai no padrao `fase<N>_todos`.
+    """
+    nome = run_id.rsplit("_", 2)[0] if run_id else f"fase{str(fase).replace('.', '_')}_todos"
+    return os.path.join(BASE_DIR, "cache_extracao", nome)
+
+
+def fotos_da_execucao(run_id="", fase="5", amostra=0):
+    """
+    Fotos de camera que interessam a uma execucao do painel.
+
+    Restringe aos PDFs que aparecem nos pares duplicados: sao centenas em vez
+    das dezenas de milhares da fase inteira, e sao os unicos que o painel
+    mostra. Sem run_id, devolve as fotos de toda a fase.
+    """
+    import analisar_fase as motor
+
+    registros = motor.ler_cache_imagens(
+        os.path.join(dir_cache(run_id, fase), "cache_imagens.jsonl"))
+    fotos = [r for r in registros
+             if _e_foto(r) and re.match(r"^\d{8}", r.get("pdf_filename") or "")]
+
+    if run_id:
+        import pares_duplicatas
+        _meta, pares = pares_duplicatas.montar_pares(run_id)
+        urls = {x["pdf_url"] for p in (pares or [])
+                for lado in ("pdfs_a", "pdfs_b") for x in p[lado]}
+        if urls:
+            fotos = [r for r in fotos if r["pdf_url"] in urls]
+
+    if amostra:
+        por_pdf = defaultdict(list)
+        for r in fotos:
+            por_pdf[r["pdf_url"]].append(r)
+        # PDFs com mais fotos primeiro: demonstram melhor
+        escolhidos = sorted(por_pdf.items(), key=lambda kv: -len(kv[1]))[:amostra]
+        fotos = [r for _, v in escolhidos for r in v]
+
+    return fotos
+
+
 def main():
     import analisar_fase as motor
 

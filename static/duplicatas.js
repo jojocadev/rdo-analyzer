@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     ligarEventos();
     await carregarExecucoes();
     if (runAtual) carregar(1);
+    retomarGeo();
 });
 
 function ligarEventos() {
@@ -52,6 +53,7 @@ function ligarEventos() {
             ? `/api/auditoria/${encodeURIComponent(runAtual)}/zip`
             : `/api/historico/${encodeURIComponent(runAtual)}/zip`;
     });
+    if ($('btnGeo')) $('btnGeo').addEventListener('click', conferirCoordenadas);
     $('runSelect').addEventListener('change', (e) => {
         runAtual = e.target.value;
         carregar(1);
@@ -738,6 +740,78 @@ async function removerDocumento(docId) {
 }
 
 /* ---------------------------- utilitários ------------------------------ */
+
+/* ---------- Conferência geográfica (OCR das coordenadas das fotos) -------- */
+
+let geoTimer = null;
+
+/** Dispara o OCR no servidor. É longo, então o retorno é só o "iniciei". */
+async function conferirCoordenadas() {
+    if (!runAtual) return;
+    try {
+        const r = await fetch('/api/geo/analisar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runAtual }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            // 409 = já está rodando (outra aba, ou a página foi recarregada):
+            // acompanhar é mais útil do que reclamar.
+            if (r.status === 409) { acompanharGeo(); return; }
+            avisarErro(d.error || 'Não foi possível iniciar a conferência.');
+            return;
+        }
+        avisar('Conferência iniciada. Leva alguns minutos; pode continuar usando o painel.');
+        acompanharGeo();
+    } catch (e) {
+        avisarErro('Falha ao falar com o servidor.');
+    }
+}
+
+/** Pergunta o progresso a cada 3 s e recarrega a tabela quando termina. */
+function acompanharGeo() {
+    const btn = $('btnGeo'), texto = $('btnGeoTexto');
+    if (!btn) return;
+    if (geoTimer) clearInterval(geoTimer);
+    btn.disabled = true;
+
+    const tick = async () => {
+        let d;
+        try { d = await (await fetch('/api/geo/status')).json(); } catch (e) { return; }
+
+        if (d.status === 'processing') {
+            texto.textContent = `Lendo coordenadas… ${Math.round(d.progress_pct)}%`;
+            btn.title = d.mensagem || '';
+            return;
+        }
+
+        clearInterval(geoTimer);
+        geoTimer = null;
+        btn.disabled = false;
+        texto.textContent = 'Conferir coordenadas';
+
+        if (d.status === 'error') {
+            avisarErro(d.erro || 'Erro na conferência geográfica.');
+        } else if (d.status === 'completed') {
+            const r = d.resultado || {};
+            avisar(`${r.pdfs_com_foto_fora || 0} de ${r.pdfs_com_coordenada || 0} PDFs `
+                 + `com foto fora do raio de ${Math.round(r.raio_m || 50)} m.`);
+            carregar(1);
+        }
+    };
+    tick();
+    geoTimer = setInterval(tick, 3000);
+}
+
+/** Se o servidor já estava conferindo, a página reassume o acompanhamento. */
+async function retomarGeo() {
+    if (!$('btnGeo')) return;
+    try {
+        const d = await (await fetch('/api/geo/status')).json();
+        if (d.status === 'processing') acompanharGeo();
+    } catch (e) { /* servidor sem a rota: botão segue utilizável */ }
+}
 
 function avisarErro(texto) { avisar(texto, true); }
 

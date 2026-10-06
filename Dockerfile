@@ -28,5 +28,10 @@ EXPOSE 5000
 # historico em andamento vivem na memoria do processo. Com 2+ workers cada
 # requisicao cairia num processo diferente e o painel perderia o estado.
 # As threads cobrem as requisicoes simultaneas do painel.
-CMD ["gunicorn", "--workers", "1", "--threads", "8", "--timeout", "600", \
-     "--access-logfile", "-", "--bind", "0.0.0.0:5000", "app:app"]
+#
+# timeout alto porque a varredura de uma fase e o OCR rodam dentro do processo
+# por dezenas de minutos: com o padrao de 30 s o arbiter mataria o worker no
+# meio do trabalho e o scan seria perdido.
+CMD ["gunicorn", "--workers", "1", "--threads", "8", "--timeout", "1800", \
+     "--graceful-timeout", "60", "--access-logfile", "-", \
+     "--bind", "0.0.0.0:5000", "app:app"]

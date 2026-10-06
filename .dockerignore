@@ -1,0 +1,25 @@
+# As miniaturas passam de 50 GB e meio milhao de arquivos. Sem este arquivo o
+# `COPY . .` tenta levar tudo para dentro do contexto de build e trava a imagem.
+extracted_images/
+cache_extracao/
+historico/
+auditoria/
+uploads/
+reports/
+
+# Dados de producao e credenciais nunca entram na imagem
+Banco de Escolas/
+backup_*/
+backup_*.json
+.env
+.env.local
+
+# Ruido de desenvolvimento
+.git/
+.gitignore
+__pycache__/
+*.pyc
+venv/
+.venv/
+imagemteste/
+*.zip

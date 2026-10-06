@@ -65,6 +65,31 @@ processing_lock = threading.Lock()
 def index():
     return send_from_directory("static", "index.html")
 
+
+@app.route("/api/health")
+def health():
+    """
+    Sonda do EasyPanel e diagnostico rapido do container.
+
+    Responde 200 mesmo sem credencial: o painel serve o historico ja em disco
+    sem falar com o Supabase, e derrubar o container por isso esconderia a
+    causa real. O campo `supabase` diz se a variavel de ambiente chegou.
+    """
+    return jsonify({
+        "ok": True,
+        "supabase": bool(SERVICE_KEY),
+        "ocr": _ocr_disponivel(),
+    })
+
+
+def _ocr_disponivel():
+    """A conferencia geografica depende do rapidocr, que e opcional na imagem."""
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+        return True
+    except Exception:
+        return False
+
 @app.route("/extracted_images/<path:filename>")
 def serve_thumb(filename):
     file_path = os.path.join(CACHE_DIR, filename)
@@ -953,6 +978,130 @@ def painel_marcar_falso_positivo(run_id):
     return jsonify({"par_id": par_id,
                     "falso_positivo": bool(data.get("falso_positivo")),
                     "total_marcados": len(marcas)})
+
+
+# --------------------------------------------------------------------------- #
+# Conferência geográfica — OCR das coordenadas carimbadas nas fotos
+# --------------------------------------------------------------------------- #
+
+import geolocalizacao
+
+# Estado próprio: o OCR é longo e roda depois da varredura, não junto dela.
+geo_state = {
+    "status": "idle",          # idle, processing, completed, error
+    "run_id": "",
+    "fase": "",
+    "mensagem": "",
+    "progress_pct": 0.0,
+    "feitos": 0,
+    "total": 0,
+    "start_time": 0,
+    "elapsed_time": 0,
+    "erro": "",
+    "resultado": {},
+}
+geo_lock = threading.Lock()
+
+
+def run_geo_task(run_id, fase, workers, raio, amostra):
+    t0 = time.time()
+
+    def progresso(feitos, total):
+        with geo_lock:
+            geo_state["feitos"] = feitos
+            geo_state["total"] = total
+            geo_state["progress_pct"] = round(feitos / max(total, 1) * 95, 1)
+            geo_state["elapsed_time"] = round(time.time() - t0, 1)
+            restam = (total - feitos) / max(feitos / max(time.time() - t0, 1), 0.01) / 60
+            geo_state["mensagem"] = (f"Lendo coordenadas: {feitos} de {total} fotos "
+                                     f"(restam ~{restam:.0f} min)")
+
+    try:
+        fotos = geolocalizacao.fotos_da_execucao(run_id, fase, amostra)
+        if not fotos:
+            raise RuntimeError("Nenhuma foto de câmera encontrada no cache desta "
+                               "execução. Rode a varredura da fase antes.")
+        with geo_lock:
+            geo_state["total"] = len(fotos)
+            geo_state["mensagem"] = f"{len(fotos)} fotos para conferir..."
+
+        geolocalizacao.processar(fotos, fase, workers, progresso)
+
+        with geo_lock:
+            geo_state["mensagem"] = "Conferindo o raio de cada PDF..."
+            geo_state["progress_pct"] = 97.0
+
+        analise = geolocalizacao.analisar_execucao(fotos, fase, raio)
+        geolocalizacao.salvar_analise(fase, analise)
+
+        # O painel guarda os pares em memória; sem isto as flags só apareceriam
+        # no próximo restart — foi exatamente o que aconteceu na primeira versão.
+        _obter_pares(run_id, invalidar=True)
+
+        fora = [a for a in analise.values() if a["fora_do_raio"]]
+        with geo_lock:
+            geo_state.update({
+                "status": "completed", "progress_pct": 100.0,
+                "mensagem": f"{len(fora)} de {len(analise)} PDFs com foto fora do raio.",
+                "elapsed_time": round(time.time() - t0, 1),
+                "resultado": {
+                    "pdfs_com_coordenada": len(analise),
+                    "pdfs_com_foto_fora": len(fora),
+                    "raio_m": raio,
+                    "distancia_max_m": round(max((a["distancia_max_m"] for a in fora),
+                                                 default=0), 1),
+                },
+            })
+    except Exception as e:
+        with geo_lock:
+            geo_state.update({"status": "error", "erro": str(e),
+                              "elapsed_time": round(time.time() - t0, 1)})
+
+
+@app.route("/api/geo/analisar", methods=["POST"])
+def geo_analisar():
+    """Dispara o OCR das coordenadas dos PDFs de uma execução já varrida."""
+    with geo_lock:
+        if geo_state["status"] == "processing":
+            return jsonify({"error": "Já existe uma conferência geográfica em andamento.",
+                            "run_id": geo_state["run_id"]}), 409
+
+    data = request.get_json(silent=True) or {}
+    run_id = (data.get("run_id") or "").strip()
+    if not run_id:
+        return jsonify({"error": "run_id é obrigatório."}), 400
+
+    meta, _pares = _obter_pares(run_id)
+    if meta is None:
+        return jsonify({"error": "Execução não encontrada no histórico."}), 404
+
+    fase = str(meta.get("fase", "5"))
+    workers = max(1, min(16, int(data.get("workers", 6))))
+    raio = float(data.get("raio", geolocalizacao.RAIO_METROS))
+    amostra = int(data.get("amostra", 0))
+
+    with geo_lock:
+        geo_state.update({
+            "status": "processing", "run_id": run_id, "fase": fase,
+            "mensagem": "Preparando...", "progress_pct": 0.0, "feitos": 0, "total": 0,
+            "start_time": time.time(), "elapsed_time": 0, "erro": "", "resultado": {},
+        })
+
+    threading.Thread(target=run_geo_task,
+                     args=(run_id, fase, workers, raio, amostra),
+                     daemon=True).start()
+
+    return jsonify({"message": f"Conferência geográfica da fase {fase} iniciada.",
+                    "run_id": run_id, "raio_m": raio})
+
+
+@app.route("/api/geo/status", methods=["GET"])
+def geo_status():
+    with geo_lock:
+        state = sanitize_json(dict(geo_state))
+    if state["status"] == "processing" and state["start_time"]:
+        state["elapsed_time"] = round(time.time() - state["start_time"], 1)
+    return jsonify(state)
 
 
 # --------------------------------------------------------------------------- #
