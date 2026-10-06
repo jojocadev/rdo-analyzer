@@ -7,3 +7,14 @@ pandas>=2.0.0
 openpyxl>=3.1.0
 scipy>=1.10.0
 PyWavelets>=1.4.0
+numpy>=1.24.0
+python-dateutil>=2.8.0
+
+# Servidor de producao (o Flask embutido nao aguenta a VPS)
+gunicorn>=21.2.0
+
+# OCR das coordenadas carimbadas nas fotos (geolocalizacao.py).
+# Roda local, sem chamada de API e sem custo. Pesa ~250 MB na imagem por causa
+# do onnxruntime; se a VPS nao for rodar a conferencia geografica, da para
+# remover esta linha — o painel continua subindo, so nao calcula o raio.
+rapidocr-onnxruntime>=1.3.0

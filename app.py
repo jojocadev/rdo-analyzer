@@ -955,21 +955,185 @@ def painel_marcar_falso_positivo(run_id):
                     "total_marcados": len(marcas)})
 
 
-@app.route("/api/painel/<run_id>/csv", methods=["GET"])
-def painel_csv(run_id):
-    """Exporta o recorte filtrado em CSV (uma linha por par)."""
-    import csv
-    import io as _io
+# --------------------------------------------------------------------------- #
+# Auditoria — lotes de pares encaminhados a partir do Painel de Duplicatas
+# --------------------------------------------------------------------------- #
 
-    meta, pares = _obter_pares(run_id)
-    if meta is None:
-        return jsonify({"error": "Execução não encontrada."}), 404
+import auditoria as mod_auditoria
+
+
+@app.route("/auditoria")
+def painel_auditoria():
+    return send_from_directory("static", "auditoria.html")
+
+
+@app.route("/api/auditoria/envios", methods=["GET"])
+def auditoria_listar():
+    """Histórico de envios, do mais recente para o mais antigo."""
+    try:
+        return jsonify({"envios": mod_auditoria.listar_envios()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/auditoria/envios", methods=["POST"])
+def auditoria_criar():
+    """Cria um envio a partir dos pares selecionados no painel."""
+    data = request.get_json(silent=True) or {}
+    run_id = (data.get("run_id") or "").strip()
+    par_ids = data.get("par_ids") or []
+
+    if not run_id:
+        return jsonify({"error": "run_id é obrigatório."}), 400
+    if not par_ids:
+        return jsonify({"error": "Selecione ao menos um par."}), 400
+
+    try:
+        envio = mod_auditoria.criar_envio(
+            run_id, par_ids,
+            observacao=(data.get("observacao") or "").strip(),
+            autor=(data.get("autor") or "").strip())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"envio_id": envio["envio_id"], "resumo": envio["resumo"],
+                    "criado_em": envio["criado_em"]})
+
+
+@app.route("/api/auditoria/<envio_id>", methods=["GET"])
+def auditoria_detalhe(envio_id):
+    """Pares de um envio, no mesmo formato que o painel de duplicatas usa."""
+    envio, pares = mod_auditoria.pares_do_envio(envio_id)
+    if envio is None:
+        return jsonify({"error": "Envio não encontrado."}), 404
 
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
         "gravidade")}
     filtrados = pares_duplicatas.aplicar_filtros(pares, filtros)
+
+    page = max(1, int(request.args.get("page", 1)))
+    limit = min(200, max(1, int(request.args.get("limit", 25))))
+    inicio = (page - 1) * limit
+
+    return jsonify(sanitize_json({
+        # a tela reaproveita o mesmo render do painel, entao o envelope e o mesmo
+        "run": {"fase": envio.get("fase", ""), "fornecedor": "",
+                "iniciado_em": envio["criado_em"],
+                "criterio": f"envio {envio['envio_id']} · origem {envio['run_id']}"},
+        "envio": {k: v for k, v in envio.items() if k != "par_ids"},
+        "resumo": pares_duplicatas.resumo(filtrados),
+        "resumo_geral": pares_duplicatas.resumo(pares),
+        "opcoes": pares_duplicatas.opcoes_filtro(pares),
+        "total": len(filtrados),
+        "page": page,
+        "limit": limit,
+        "pares": filtrados[inicio:inicio + limit],
+    }))
+
+
+@app.route("/api/auditoria/<envio_id>/documentos", methods=["GET"])
+def auditoria_docs_listar(envio_id):
+    """Documentos já anexados, agrupados por INEP para a tela montar a lista."""
+    try:
+        docs = mod_auditoria.listar_documentos(envio_id)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    por_inep = {}
+    for d in docs:
+        por_inep.setdefault(str(d.get("inep")), []).append(d)
+    return jsonify({"documentos": docs, "por_inep": por_inep, "total": len(docs)})
+
+
+@app.route("/api/auditoria/<envio_id>/documentos", methods=["POST"])
+def auditoria_docs_enviar(envio_id):
+    """Recebe o arquivo de um INEP e guarda no Storage do Supabase."""
+    if mod_auditoria.carregar_envio(envio_id) is None:
+        return jsonify({"error": "Envio não encontrado."}), 404
+
+    arquivo = request.files.get("arquivo")
+    inep = (request.form.get("inep") or "").strip()
+    if not arquivo or not arquivo.filename:
+        return jsonify({"error": "Nenhum arquivo enviado."}), 400
+    if not inep.isdigit():
+        return jsonify({"error": "INEP inválido."}), 400
+
+    try:
+        registro = mod_auditoria.salvar_documento(
+            envio_id, int(inep), arquivo.filename, arquivo.read(),
+            par_id=(request.form.get("par_id") or "").strip(),
+            observacao=(request.form.get("observacao") or "").strip(),
+            enviado_por=(request.form.get("enviado_por") or "").strip())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify(sanitize_json(registro))
+
+
+@app.route("/api/auditoria/documento", methods=["GET"])
+def auditoria_doc_abrir():
+    """Baixa um documento anexado."""
+    caminho = request.args.get("path", "")
+    if not caminho:
+        return jsonify({"error": "path é obrigatório."}), 400
+    try:
+        destino = mod_auditoria.caminho_documento(caminho)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not destino:
+        return jsonify({"error": "Documento não encontrado."}), 404
+    return send_file(destino, as_attachment=True,
+                     download_name=os.path.basename(caminho).split("_", 2)[-1])
+
+
+@app.route("/api/auditoria/<envio_id>/documentos/<doc_id>", methods=["DELETE"])
+def auditoria_doc_excluir(envio_id, doc_id):
+    if mod_auditoria.excluir_documento(envio_id, doc_id):
+        return jsonify({"message": "Documento removido."})
+    return jsonify({"error": "Documento não encontrado."}), 404
+
+
+@app.route("/api/auditoria/<envio_id>/csv", methods=["GET"])
+def auditoria_csv(envio_id):
+    """Exporta o lote filtrado em CSV, no mesmo formato do painel."""
+    envio, pares = mod_auditoria.pares_do_envio(envio_id)
+    if envio is None:
+        return jsonify({"error": "Envio não encontrado."}), 404
+
+    filtros = {k: request.args.get(k, "") for k in (
+        "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
+        "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
+        "gravidade")}
+    return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
+                         f"Auditoria_{envio_id}")
+
+
+@app.route("/api/auditoria/<envio_id>/zip", methods=["GET"])
+def auditoria_zip(envio_id):
+    """As imagens do lote vêm do ZIP da execução de origem."""
+    envio = mod_auditoria.carregar_envio(envio_id)
+    if envio is None:
+        return jsonify({"error": "Envio não encontrado."}), 404
+    return download_historico_zip(envio["run_id"])
+
+
+@app.route("/api/auditoria/<envio_id>", methods=["DELETE"])
+def auditoria_excluir(envio_id):
+    if mod_auditoria.excluir_envio(envio_id):
+        return jsonify({"message": f"Envio {envio_id} removido."})
+    return jsonify({"error": "Envio não encontrado."}), 404
+
+
+def _csv_de_pares(filtrados, nome_arquivo):
+    """Monta o CSV de uma lista de pares (usado pelo painel e pela auditoria)."""
+    import csv
+    import io as _io
 
     buf = _io.StringIO()
     w = csv.writer(buf, delimiter=";")
@@ -992,11 +1156,25 @@ def painel_csv(run_id):
             " | ".join(x["pdf_filename"] or "" for x in p["pdfs_b"]),
         ])
 
-    resp = app.response_class(
-        "﻿" + buf.getvalue(),           # BOM para o Excel abrir com acentos certos
-        mimetype="text/csv; charset=utf-8")
-    resp.headers["Content-Disposition"] = f'attachment; filename="Duplicatas_{run_id}.csv"'
+    resp = app.response_class("﻿" + buf.getvalue(),
+                              mimetype="text/csv; charset=utf-8")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{nome_arquivo}.csv"'
     return resp
+
+
+@app.route("/api/painel/<run_id>/csv", methods=["GET"])
+def painel_csv(run_id):
+    """Exporta o recorte filtrado em CSV (uma linha por par)."""
+    meta, pares = _obter_pares(run_id)
+    if meta is None:
+        return jsonify({"error": "Execução não encontrada."}), 404
+
+    filtros = {k: request.args.get(k, "") for k in (
+        "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
+        "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
+        "gravidade")}
+    return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
+                         f"Duplicatas_{run_id}")
 
 
 @app.route("/api/results", methods=["GET"])

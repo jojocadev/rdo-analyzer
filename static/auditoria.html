@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Painel de Duplicatas · RDO</title>
+    <title>Auditoria · RDO</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600;650;700&display=swap" rel="stylesheet">
@@ -20,20 +20,14 @@
                 <img src="logo-aprender-conectado.png" alt="Aprender Conectado">
             </div>
 
-            <h1>Painel de Duplicatas</h1>
+            <h1>Auditoria</h1>
             <p class="sub" id="runInfo">Carregando execução…</p>
         </div>
         <div style="display:flex; gap:.55rem; align-items:center; flex-wrap:wrap;">
             <div class="field" style="min-width:280px;">
-                <label for="runSelect">Execução</label>
+                <label for="runSelect">Envio</label>
                 <select id="runSelect"></select>
             </div>
-            <a class="btn btn-ghost" href="/auditoria" title="Ver os envios para auditoria">
-                <i class="fa-solid fa-clipboard-check"></i> Auditoria
-            </a>
-            <a class="btn btn-ghost" href="/" title="Voltar para a análise">
-                <i class="fa-solid fa-arrow-left"></i> Análise
-            </a>
         </div>
     </header>
 
@@ -154,11 +148,6 @@
             <button class="btn" id="btnZip">
                 <i class="fa-solid fa-file-zipper"></i> Baixar imagens (ZIP)
             </button>
-            <button class="btn btn-auditoria" id="btnAuditoria" disabled
-                    title="Selecione pares na coluna Enviar">
-                <i class="fa-solid fa-paper-plane"></i>
-                Enviar para auditoria <span id="btnAuditoriaCont"></span>
-            </button>
         </div>
     </section>
 
@@ -166,11 +155,6 @@
     <section class="card">
         <div class="table-head">
             <div class="count" id="tableCount">—</div>
-            <div class="sel-bar" id="selBar" hidden>
-                <span id="selResumo"></span>
-                <button class="btn btn-sm" id="btnSelTodos">Selecionar todos os filtrados</button>
-                <button class="btn btn-sm" id="btnSelLimpar">Limpar seleção</button>
-            </div>
             <div style="display:flex; gap:.55rem; align-items:center;">
                 <label class="field" style="flex-direction:row; align-items:center; gap:.45rem;">
                     <span style="font-size:.78rem; color:var(--text-2);">Por página</span>
@@ -185,16 +169,10 @@
             <table class="pares">
                 <thead>
                     <tr class="grupo">
-                        <th class="blk-sel"  rowspan="2">
-                            <label class="sel-todos" title="Selecionar todos desta página">
-                                <input type="checkbox" id="chkTodos">
-                                <span>Enviar</span>
-                            </label>
-                        </th>
-                        <th class="blk-de"   colspan="2">Escola A · INEP 1</th>
+                                                <th class="blk-de"   colspan="2">Escola A · INEP 1</th>
                         <th class="blk-meio" colspan="2">Imagens duplicadas</th>
                         <th class="blk-para" colspan="2">Escola B · INEP 2</th>
-                        <th class="blk-fp"   rowspan="2">Falso positivo</th>
+                        <th class="blk-doc"  rowspan="2">Documentação</th>
                     </tr>
                     <tr class="cols">
                         <th style="min-width:190px;">Escola</th>
@@ -213,27 +191,6 @@
     </section>
 </div>
 
-<!-- modal de envio para auditoria -->
-<div class="modal" id="modalEnvio" hidden>
-    <div class="modal-box">
-        <h2><i class="fa-solid fa-paper-plane"></i> Enviar para auditoria</h2>
-        <p class="modal-resumo" id="envResumo">—</p>
-
-        <label for="envObs">Observação para quem vai tratar (opcional)</label>
-        <textarea id="envObs" rows="4"
-                  placeholder="Ex.: verificar reuso de fotos entre as escolas deste lote"></textarea>
-
-        <div class="modal-erro" id="envErro" hidden></div>
-
-        <div class="modal-acoes">
-            <button class="btn" id="envCancelar">Cancelar</button>
-            <button class="btn btn-auditoria" id="envConfirmar">
-                <i class="fa-solid fa-paper-plane"></i> Enviar
-            </button>
-        </div>
-    </div>
-</div>
-
 <!-- lightbox -->
 <div class="lb" id="lb">
     <button class="fechar" id="lbFechar" aria-label="Fechar">&times;</button>
@@ -241,6 +198,7 @@
     <div class="cap" id="lbCap"></div>
 </div>
 
+<script>window.PAINEL_MODO = "auditoria";</script>
 <script src="duplicatas.js"></script>
 </body>
 </html>

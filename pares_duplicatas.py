@@ -17,6 +17,7 @@ from collections import defaultdict
 from itertools import combinations
 
 import analisar_fase as motor
+import geolocalizacao
 
 # "12009679 - AC - BUJARI - ESC MARIA DO CARMO RAMOS - TIPP GESAC.pdf"
 _RE_UF = re.compile(r"^[A-Z]{2}$")
@@ -136,6 +137,9 @@ def montar_pares(run_id):
         return None, []
 
     grupos = meta.pop("grupos", []) or []
+    # Conferencia geografica: calculada a parte (geolocalizacao.py) e lida aqui,
+    # para a montagem dos pares nao depender do OCR ter rodado.
+    geo = geolocalizacao.ler_analise(meta.get("fase", "5"))
     pares = {}
 
     for g in grupos:
@@ -188,6 +192,7 @@ def montar_pares(run_id):
                 par[lado].setdefault(m["pdf_url"], {
                     "pdf_filename": m.get("pdf_filename"),
                     "pdf_url": m.get("pdf_url"),
+                    "geo": geo.get(m["pdf_url"]),
                     "inep_no_nome": info_pdf["inep"],
                     # O nome do arquivo carrega o INEP da escola a que ele pertence.
                     # Divergir do INEP do registro significa que o RDO anexado é de
@@ -217,6 +222,13 @@ def montar_pares(run_id):
         par["mesma_uf"] = par["escola_a"]["uf"] == par["escola_b"]["uf"]
         par["pdf_divergente"] = any(p["inep_divergente"]
                                     for p in par["pdfs_a"] + par["pdfs_b"])
+
+        # Fotos tiradas fora do raio da escola, somando os dois lados do par.
+        geos = [p["geo"] for p in par["pdfs_a"] + par["pdfs_b"] if p.get("geo")]
+        par["fora_do_raio"] = sum(g.get("fora_do_raio", 0) for g in geos)
+        par["com_coordenada"] = sum(g.get("com_coordenada", 0) for g in geos)
+        par["distancia_max_m"] = max((g.get("distancia_max_m") or 0 for g in geos),
+                                     default=0)
         # Os dois lados apontando para o MESMO arquivo é o caso mais grave: não é só
         # foto repetida, é o RDO de uma escola servindo de relatório para a outra.
         par["mesmo_pdf"] = bool(
@@ -317,7 +329,9 @@ def aplicar_filtros(pares, f):
         out = [p for p in out if not p["mesmo_municipio"]]
 
     gravidade = (f.get("gravidade") or "").strip()
-    if gravidade == "mesmo_pdf":
+    if gravidade == "fora_do_raio":
+        out = [p for p in out if p.get("fora_do_raio")]
+    elif gravidade == "mesmo_pdf":
         out = [p for p in out if p["mesmo_pdf"]]
     elif gravidade == "pdf_divergente":
         out = [p for p in out if p["pdf_divergente"]]
@@ -330,7 +344,7 @@ def resumo(pares):
     escolas = set()
     por_fornecedor = defaultdict(int)
     por_uf = defaultdict(int)
-    imagens = fotos = exatas = fp = mesmo_pdf = pdf_div = 0
+    imagens = fotos = exatas = fp = mesmo_pdf = pdf_div = fora_raio = 0
 
     for p in pares:
         escolas.add(p["escola_a"]["inep"])
@@ -344,6 +358,8 @@ def resumo(pares):
             mesmo_pdf += 1
         if p.get("pdf_divergente"):
             pdf_div += 1
+        if p.get("fora_do_raio"):
+            fora_raio += 1
         for nome in p["fornecedores"]:
             por_fornecedor[nome] += 1
         for lado in ("escola_a", "escola_b"):
@@ -364,6 +380,7 @@ def resumo(pares):
         "mesmo_municipio": sum(1 for p in pares if p["mesmo_municipio"]),
         "mesmo_pdf": mesmo_pdf,
         "pdf_divergente": pdf_div,
+        "fora_do_raio": fora_raio,
         "por_fornecedor": ordenar(por_fornecedor),
         "por_uf": ordenar(por_uf),
     }

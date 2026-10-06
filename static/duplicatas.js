@@ -8,9 +8,29 @@
 const $ = (id) => document.getElementById(id);
 const num = (v) => (Number(v) || 0).toLocaleString('pt-BR');
 
+// A mesma tela serve o painel de duplicatas e a auditoria; muda a fonte dos
+// dados e o seletor do topo. auditoria.html define window.PAINEL_MODO.
+const MODO = window.PAINEL_MODO || 'painel';
+const EH_AUDITORIA = MODO === 'auditoria';
+
+/** "2026-09-02 09:03:30" -> "02/09/2026 09:03" */
+function dataBR(valor) {
+    if (!valor) return '';
+    const m = String(valor).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : valor;
+}
+
 let runAtual = null;
 let paginaAtual = 1;
 let imagensPorPar = {};   // par_id -> imagens, para o lightbox navegar
+
+// Pares marcados para auditoria. Guardado por par_id num Set, e nao lido das
+// checkboxes da tela, para a selecao sobreviver a troca de pagina e de filtro.
+// Documentos ja anexados no envio aberto, indexados por INEP.
+let documentosPorInep = {};
+
+const selecionados = new Set();
+const dadosSelecionados = new Map();   // par_id -> dados, para quem for enviar depois
 
 /* --------------------------- inicialização ----------------------------- */
 
@@ -26,7 +46,11 @@ function ligarEventos() {
     $('btnLimpar').addEventListener('click', limparFiltros);
     $('btnCsv').addEventListener('click', baixarCsv);
     $('btnZip').addEventListener('click', () => {
-        if (runAtual) window.location.href = `/api/historico/${encodeURIComponent(runAtual)}/zip`;
+        if (!runAtual) return;
+        // Na auditoria o id e de um envio, nao de uma execucao: a rota e outra.
+        window.location.href = EH_AUDITORIA
+            ? `/api/auditoria/${encodeURIComponent(runAtual)}/zip`
+            : `/api/historico/${encodeURIComponent(runAtual)}/zip`;
     });
     $('runSelect').addEventListener('change', (e) => {
         runAtual = e.target.value;
@@ -43,17 +67,51 @@ function ligarEventos() {
      'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade'].forEach((id) =>
         $(id).addEventListener('change', () => carregar(1)));
 
+    // A pagina de auditoria nao tem coluna de selecao nem botao de envio.
+    const liga = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
+    liga('chkTodos', 'change', (e) => selecionarPagina(e.target.checked));
+    liga('btnSelTodos', 'click', selecionarTodosFiltrados);
+    liga('btnSelLimpar', 'click', limparSelecao);
+    liga('btnAuditoria', 'click', abrirModalEnvio);
+    liga('envCancelar', 'click', fecharModalEnvio);
+    liga('envConfirmar', 'click', confirmarEnvio);
+    liga('modalEnvio', 'click', (e) => { if (e.target.id === 'modalEnvio') fecharModalEnvio(); });
+
     $('lbFechar').addEventListener('click', fecharLightbox);
     $('lb').addEventListener('click', (e) => { if (e.target.id === 'lb') fecharLightbox(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') fecharLightbox(); });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        fecharLightbox();
+        const m = $('modalEnvio');
+        if (m) m.hidden = true;
+    });
 }
 
 async function carregarExecucoes() {
+    const sel = $('runSelect');
     try {
+        if (EH_AUDITORIA) {
+            const r = await fetch('/api/auditoria/envios');
+            const d = await r.json();
+            const envios = d.envios || [];
+            if (!envios.length) {
+                sel.innerHTML = '<option value="">Nenhum envio ainda</option>';
+                $('runInfo').textContent =
+                    'Selecione pares no Painel de Duplicatas e clique em Enviar para auditoria.';
+                return;
+            }
+            sel.innerHTML = envios.map((e) => {
+                const rs = e.resumo || {};
+                return `<option value="${e.envio_id}">${dataBR(e.criado_em)} · ` +
+                       `${num(rs.pares)} pares · ${num(rs.escolas)} escolas</option>`;
+            }).join('');
+            runAtual = envios[0].envio_id;
+            return;
+        }
+
         const r = await fetch('/api/painel/execucoes');
         const d = await r.json();
         const runs = d.runs || [];
-        const sel = $('runSelect');
 
         if (!runs.length) {
             sel.innerHTML = '<option value="">Nenhuma execução concluída</option>';
@@ -63,12 +121,12 @@ async function carregarExecucoes() {
 
         sel.innerHTML = runs.map((r) => {
             const m = r.metricas || {};
-            return `<option value="${r.run_id}">Fase ${r.fase} · ${r.iniciado_em} · ` +
+            return `<option value="${r.run_id}">Fase ${r.fase} · ${dataBR(r.iniciado_em)} · ` +
                    `${num(m.grupos_duplicatas)} grupos</option>`;
         }).join('');
         runAtual = runs[0].run_id;
     } catch (e) {
-        $('runInfo').textContent = 'Erro ao carregar execuções: ' + e.message;
+        $('runInfo').textContent = 'Erro ao carregar: ' + e.message;
     }
 }
 
@@ -115,19 +173,21 @@ async function carregar(pagina) {
     if (!runAtual) return;
     paginaAtual = pagina || 1;
 
-    $('tbody').innerHTML = `<tr><td colspan="7" class="empty">
+    $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 8}" class="empty">
         <i class="fa-solid fa-spinner spinner"></i> Carregando…</td></tr>`;
 
     try {
         const qs = queryString({ page: paginaAtual, limit: $('fLimit').value });
-        const r = await fetch(`/api/painel/${encodeURIComponent(runAtual)}?${qs}`);
+        const base = EH_AUDITORIA ? '/api/auditoria/' : '/api/painel/';
+        const r = await fetch(`${base}${encodeURIComponent(runAtual)}?${qs}`);
         const d = await r.json();
 
         if (!r.ok) {
-            $('tbody').innerHTML = `<tr><td colspan="7" class="empty">${d.error || 'Erro'}</td></tr>`;
+            $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 8}" class="empty">${d.error || 'Erro'}</td></tr>`;
             return;
         }
 
+        if (EH_AUDITORIA) await carregarDocumentos();
         renderInfo(d);
         renderCards(d);
         renderBarras(d);
@@ -135,15 +195,24 @@ async function carregar(pagina) {
         renderTabela(d);
         renderPager(d);
     } catch (e) {
-        $('tbody').innerHTML = `<tr><td colspan="7" class="empty">Erro: ${e.message}</td></tr>`;
+        $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 8}" class="empty">Erro: ${e.message}</td></tr>`;
     }
 }
 
 function renderInfo(d) {
     const run = d.run || {};
+    if (EH_AUDITORIA) {
+        const e = d.envio || {};
+        const rs = e.resumo || {};
+        $('runInfo').textContent =
+            `Enviado em ${dataBR(e.criado_em)} · ${num(rs.pares)} pares · ` +
+            `${num(rs.escolas)} escolas · origem: execução da fase ${e.fase}` +
+            (e.observacao ? ` · ${e.observacao}` : '');
+        return;
+    }
     $('runInfo').textContent =
         `Fase ${run.fase} · ${run.fornecedor || 'todos os fornecedores'} · ` +
-        `executado em ${run.iniciado_em} · ${run.criterio || ''}`;
+        `executado em ${dataBR(run.iniciado_em)} · ${run.criterio || ''}`;
 }
 
 function renderCards(d) {
@@ -158,6 +227,8 @@ function renderCards(d) {
          `${num(r.fotos_camera)} são fotos de câmera`],
         ['is-purple', 'Mesmo PDF nos dois', r.mesmo_pdf,
          `${num(r.pdf_divergente)} com PDF de outra escola`],
+        ['is-amber', 'Fora do raio de 50 m', r.fora_do_raio,
+         'pares com foto longe da escola'],
         ['is-red', 'Falsos positivos', g.falsos_positivos,
          `${num(g.pendentes)} pares pendentes de triagem`],
     ];
@@ -209,7 +280,7 @@ function preencherOpcoes(o) {
 
 /* ------------------------------- tabela -------------------------------- */
 
-const MAX_THUMBS = 6;
+const MAX_THUMBS = 2;
 
 function renderTabela(d) {
     const pares = d.pares || [];
@@ -218,7 +289,7 @@ function renderTabela(d) {
         : 'Nenhum par com os filtros atuais';
 
     if (!pares.length) {
-        $('tbody').innerHTML = `<tr><td colspan="7" class="empty">
+        $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 8}" class="empty">
             <div class="big">🔍</div>Nenhum par encontrado com os filtros atuais.
             <div style="margin-top:.5rem; font-size:.85rem;">
                 Tente limpar os filtros ou mostrar os falsos positivos.</div></td></tr>`;
@@ -226,22 +297,139 @@ function renderTabela(d) {
     }
 
     imagensPorPar = {};
-    pares.forEach((p) => (imagensPorPar[p.par_id] = p.imagens));
+    pares.forEach((p) => {
+        imagensPorPar[p.par_id] = p.imagens;
+        dadosSelecionados.set(p.par_id, p);
+    });
 
     $('tbody').innerHTML = pares.map((p) => `
-        <tr class="${p.falso_positivo ? 'is-fp' : ''}" data-par="${p.par_id}">
+        <tr class="${p.falso_positivo ? 'is-fp' : ''}${selecionados.has(p.par_id) ? ' is-sel' : ''}"
+            data-par="${p.par_id}">
+            ${EH_AUDITORIA ? '' : `<td class="cel-sel">${celSelecao(p)}</td>`}
             <td class="cel-de">${celEscola(p.escola_a, p)}</td>
             <td class="cel-de">${celPdfs(p.pdfs_a, p.escola_a.inep)}</td>
             <td class="cel-meio">${celEvidencias(p)}</td>
             <td class="cel-meio">${celThumbs(p)}</td>
             <td class="cel-para">${celEscola(p.escola_b, p)}</td>
             <td class="cel-para">${celPdfs(p.pdfs_b, p.escola_b.inep)}</td>
-            <td>${celToggle(p)}</td>
+            ${EH_AUDITORIA ? `<td class="cel-doc">${celDocumentos(p)}</td>`
+                            : `<td>${celToggle(p)}</td>`}
         </tr>`).join('');
 
     $('tbody').querySelectorAll('.tg input').forEach((el) =>
         el.addEventListener('change', (e) => marcarFalsoPositivo(
             e.target.dataset.par, e.target.checked, e.target)));
+
+    $('tbody').querySelectorAll('.chk-envio').forEach((el) =>
+        el.addEventListener('change', (e) => alternarSelecao(
+            e.target.dataset.par, e.target.checked)));
+
+    atualizarSelecao();
+}
+
+/* ------------------------ seleção para auditoria ----------------------- */
+
+function alternarSelecao(parId, marcado) {
+    if (marcado) selecionados.add(parId);
+    else selecionados.delete(parId);
+
+    const linha = $('tbody').querySelector(`tr[data-par="${parId}"]`);
+    if (linha) linha.classList.toggle('is-sel', marcado);
+    atualizarSelecao();
+}
+
+/** Marca ou desmarca todas as linhas da página atual. */
+function selecionarPagina(marcar) {
+    $('tbody').querySelectorAll('.chk-envio').forEach((el) => {
+        el.checked = marcar;
+        if (marcar) selecionados.add(el.dataset.par);
+        else selecionados.delete(el.dataset.par);
+        const linha = el.closest('tr');
+        if (linha) linha.classList.toggle('is-sel', marcar);
+    });
+    atualizarSelecao();
+}
+
+/**
+ * Seleciona todos os pares que passam nos filtros, não só os da página.
+ *
+ * O cabeçalho age sobre a página visível; aqui busca-se o conjunto inteiro no
+ * servidor, para o usuário não precisar paginar marcando de 25 em 25.
+ */
+async function selecionarTodosFiltrados() {
+    const btn = $('btnSelTodos');
+    const rotulo = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Selecionando…';
+
+    try {
+        let pagina = 1;
+        for (;;) {
+            const qs = queryString({ page: pagina, limit: 200 });
+            const base = EH_AUDITORIA ? '/api/auditoria/' : '/api/painel/';
+            const r = await fetch(`${base}${encodeURIComponent(runAtual)}?${qs}`);
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'falha ao buscar');
+
+            (d.pares || []).forEach((p) => {
+                selecionados.add(p.par_id);
+                dadosSelecionados.set(p.par_id, p);
+            });
+
+            if (pagina * (d.limit || 200) >= (d.total || 0)) break;
+            pagina += 1;
+        }
+
+        $('tbody').querySelectorAll('.chk-envio').forEach((el) => {
+            el.checked = selecionados.has(el.dataset.par);
+            const linha = el.closest('tr');
+            if (linha) linha.classList.toggle('is-sel', el.checked);
+        });
+        atualizarSelecao();
+    } catch (e) {
+        alert('Não foi possível selecionar todos: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = rotulo;
+    }
+}
+
+function limparSelecao() {
+    selecionados.clear();
+    $('tbody').querySelectorAll('.chk-envio').forEach((el) => (el.checked = false));
+    $('tbody').querySelectorAll('tr.is-sel').forEach((tr) => tr.classList.remove('is-sel'));
+    atualizarSelecao();
+}
+
+/** Mantém o botão, o contador e a barra coerentes com o Set de seleção. */
+function atualizarSelecao() {
+    const n = selecionados.size;
+
+    const btn = $('btnAuditoria');
+    if (!btn) return;   // pagina de auditoria: nao ha o que atualizar
+    btn.disabled = n === 0;
+    $('btnAuditoriaCont').textContent = n ? `(${num(n)})` : '';
+    btn.title = n ? `${n} par(es) selecionado(s)` : 'Selecione pares na coluna Enviar';
+
+    // INEPs distintos: um par tem duas escolas, e a mesma escola pode estar em vários
+    const ineps = new Set();
+    selecionados.forEach((id) => {
+        const p = dadosSelecionados.get(id);
+        if (p) { ineps.add(p.escola_a.inep); ineps.add(p.escola_b.inep); }
+    });
+
+    // Cabeçalho reflete a página: marcado se todas, traço se algumas
+    const naPagina = Array.from($('tbody').querySelectorAll('.chk-envio'));
+    const marcadas = naPagina.filter((el) => el.checked).length;
+    const mestre = $('chkTodos');
+    mestre.checked = naPagina.length > 0 && marcadas === naPagina.length;
+    mestre.indeterminate = marcadas > 0 && marcadas < naPagina.length;
+
+    const barra = $('selBar');
+    barra.hidden = n === 0;
+    $('selResumo').innerHTML = n
+        ? `<strong>${num(n)}</strong> par(es) · <strong>${num(ineps.size)}</strong> INEPs selecionados`
+        : '';
 }
 
 function celEscola(e, p) {
@@ -262,15 +450,25 @@ function celEscola(e, p) {
 function celPdfs(pdfs, inep) {
     if (!pdfs || !pdfs.length) return '<span style="color:var(--text-3)">—</span>';
     return `<div class="pdf-list">` + pdfs.map((f) => {
-        const pag = (f.paginas && f.paginas.length) ? f.paginas[0] : 1;
-        const lista = (f.paginas || []).join(', ');
+        const pags = f.paginas || [];
+        const pag = pags.length ? pags[0] : 1;
+        // A lista inteira ("pag. 2, 3, 4 ... 14") esticava a coluna e empurrava
+        // o Falso positivo para fora da tela. Mostra as 3 primeiras; o resto
+        // vira um "+N", e o titulo do botao traz a lista completa.
+        const lista = pags.length > 3
+            ? `${pags.slice(0, 3).join(', ')} +${pags.length - 3}`
+            : pags.join(', ');
         const aviso = f.inep_divergente
             ? ` — ATENÇÃO: o arquivo é da escola ${f.inep_no_nome}` : '';
         return `<button class="btn btn-sm pdf-btn ${f.inep_divergente ? 'is-divergente' : ''}"
-                    title="${(f.pdf_filename || '').replace(/"/g, '')}${aviso}"
+                    title="${(f.pdf_filename || '').replace(/"/g, '')}${aviso}${
+                        pags.length > 3 ? ' — paginas: ' + pags.join(', ') : ''}"
                     onclick="abrirPdf('${f.pdf_url}', ${pag})">
                     <i class="fa-solid fa-file-pdf" style="color:var(--red)"></i>
-                    PDF ${inep}${lista ? ` <small>· pág. ${lista}</small>` : ''}
+                    <span class="pdf-txt">
+                        <span class="pdf-nome">PDF ${inep}</span>
+                        ${lista ? `<small class="pdf-pags">pág. ${lista}</small>` : ''}
+                    </span>
                 </button>
                 ${f.inep_divergente
                     ? `<span class="tag tag-alerta" title="O nome do arquivo aponta outra escola">
@@ -280,7 +478,7 @@ function celPdfs(pdfs, inep) {
 
 function celEvidencias(p) {
     return `
-        <div class="img-count">${num(p.qtd_imagens)} imagem${p.qtd_imagens > 1 ? 'ns' : ''} igual${p.qtd_imagens > 1 ? 'is' : ''}</div>
+        <div class="img-count">${num(p.qtd_imagens)} image${p.qtd_imagens > 1 ? 'ns' : 'm'} igua${p.qtd_imagens > 1 ? 'is' : 'l'}</div>
         <div class="img-tags">
             ${p.todas_exatas
                 ? '<span class="tag tag-exata">100% exatas</span>'
@@ -288,6 +486,11 @@ function celEvidencias(p) {
                    <span class="tag tag-visual">${num(p.qtd_imagens - p.qtd_exatas)} visuais</span>`}
             ${p.qtd_fotos_camera
                 ? `<span class="tag tag-foto"><i class="fa-solid fa-camera"></i> ${num(p.qtd_fotos_camera)} foto${p.qtd_fotos_camera > 1 ? 's' : ''}</span>`
+                : ''}
+        </div>
+        <div class="img-tags">
+            ${p.fora_do_raio
+                ? `<span class="tag tag-geo" title="${num(p.fora_do_raio)} de ${num(p.com_coordenada)} fotos com coordenada foram tiradas a mais de 50 m do centro da escola (máx. ${p.distancia_max_m} m)"><i class="fa-solid fa-location-crosshairs"></i> ${num(p.fora_do_raio)} foto(s) fora do raio</span>`
                 : ''}
         </div>
         <div class="img-tags">
@@ -316,6 +519,41 @@ function celThumbs(p) {
         (resto > 0
             ? `<div class="mais" onclick="abrirLightbox('${p.par_id}', ${MAX_THUMBS})">+${resto}</div>`
             : '') + `</div>`;
+}
+
+function celSelecao(p) {
+    const marcado = selecionados.has(p.par_id) ? 'checked' : '';
+    return `<label class="sel-box" title="Selecionar ${p.escola_a.inep} x ${p.escola_b.inep}">
+                <input type="checkbox" class="chk-envio" data-par="${p.par_id}" ${marcado}>
+            </label>`;
+}
+
+/** Coluna Documentação: um anexo por escola do par. */
+function celDocumentos(p) {
+    return '<div class="doc-col">' +
+        [p.escola_a, p.escola_b].map((e) => {
+            const docs = documentosPorInep[String(e.inep)] || [];
+            const lista = docs.map((d) => `
+                <div class="doc-item" title="${d.arquivo_nome}">
+                    <a href="/api/auditoria/documento?path=${encodeURIComponent(d.arquivo_path)}">
+                        <i class="fa-solid fa-paperclip"></i> ${d.arquivo_nome}
+                    </a>
+                    <button class="doc-x" title="Remover"
+                            onclick="removerDocumento('${d.doc_id}')">&times;</button>
+                </div>`).join('');
+
+            return `
+            <div class="doc-escola">
+                <div class="doc-inep">${e.inep}</div>
+                ${lista}
+                <label class="btn btn-sm doc-add">
+                    <i class="fa-solid fa-upload"></i> Anexar
+                    <input type="file" hidden
+                           onchange="enviarDocumento(this, ${e.inep}, '${p.par_id}')"
+                           accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.zip">
+                </label>
+            </div>`;
+        }).join('') + '</div>';
 }
 
 function celToggle(p) {
@@ -380,7 +618,144 @@ function atualizarContadorFp(delta) {
     }
 }
 
+/* --------------------- envio para auditoria ---------------------------- */
+
+/** Abre o modal com o resumo do que sera enviado. */
+function abrirModalEnvio() {
+    if (!selecionados.size) return;
+
+    const ineps = new Set();
+    selecionados.forEach((id) => {
+        const p = dadosSelecionados.get(id);
+        if (p) { ineps.add(p.escola_a.inep); ineps.add(p.escola_b.inep); }
+    });
+
+    $('envResumo').innerHTML =
+        `<strong>${num(selecionados.size)}</strong> par(es) e ` +
+        `<strong>${num(ineps.size)}</strong> INEPs serão encaminhados.`;
+    $('envObs').value = '';
+    $('envErro').hidden = true;
+    $('modalEnvio').hidden = false;
+    $('envObs').focus();
+}
+
+function fecharModalEnvio() {
+    $('modalEnvio').hidden = true;
+}
+
+/** Grava o lote e leva para a página de auditoria. */
+async function confirmarEnvio() {
+    const ids = Array.from(selecionados);
+    if (!ids.length) return fecharModalEnvio();
+
+    const btn = $('envConfirmar');
+    const erro = $('envErro');
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    erro.hidden = true;
+
+    try {
+        const r = await fetch('/api/auditoria/envios', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_id: runAtual, par_ids: ids,
+                observacao: $('envObs').value.trim(),
+            }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha ao enviar');
+
+        limparSelecao();
+        fecharModalEnvio();
+        // Sem redirecionar: quem esta triando continua de onde parou.
+        avisar(`Enviado para auditoria: ${num(d.resumo.pares)} pares, ` +
+               `${num(d.resumo.escolas)} escolas.`);
+    } catch (e) {
+        erro.textContent = 'Não foi possível enviar: ' + e.message;
+        erro.hidden = false;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Enviar';
+    }
+}
+
+/* ------------------------- documentos da auditoria --------------------- */
+
+async function carregarDocumentos() {
+    try {
+        const r = await fetch(`/api/auditoria/${encodeURIComponent(runAtual)}/documentos`);
+        const d = await r.json();
+        documentosPorInep = d.por_inep || {};
+    } catch (e) {
+        documentosPorInep = {};
+    }
+}
+
+/** Envia o arquivo escolhido para o INEP daquela linha. */
+async function enviarDocumento(input, inep, parId) {
+    const arquivo = input.files && input.files[0];
+    if (!arquivo) return;
+
+    const rotulo = input.closest('.doc-add');
+    const original = rotulo.innerHTML;
+    rotulo.innerHTML = '<i class="fa-solid fa-spinner spinner"></i> Enviando…';
+
+    const dados = new FormData();
+    dados.append('arquivo', arquivo);
+    dados.append('inep', inep);
+    dados.append('par_id', parId || '');
+
+    try {
+        const r = await fetch(`/api/auditoria/${encodeURIComponent(runAtual)}/documentos`, {
+            method: 'POST', body: dados });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha no envio');
+
+        await carregarDocumentos();
+        await carregar(paginaAtual);
+        avisar(`Documento anexado ao INEP ${inep}.`);
+    } catch (e) {
+        rotulo.innerHTML = original;
+        input.value = '';
+        avisarErro('Não foi possível anexar: ' + e.message);
+    }
+}
+
+async function removerDocumento(docId) {
+    try {
+        const r = await fetch(
+            `/api/auditoria/${encodeURIComponent(runAtual)}/documentos/${encodeURIComponent(docId)}`,
+            { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha ao remover');
+        await carregarDocumentos();
+        await carregar(paginaAtual);
+        avisar('Documento removido.');
+    } catch (e) {
+        avisarErro('Não foi possível remover: ' + e.message);
+    }
+}
+
 /* ---------------------------- utilitários ------------------------------ */
+
+function avisarErro(texto) { avisar(texto, true); }
+
+/** Aviso curto no canto, sem interromper o que o usuário está fazendo. */
+function avisar(texto, erro) {
+    let el = $('aviso');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'aviso';
+        el.className = 'toast';
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<i class="fa-solid fa-${erro ? 'triangle-exclamation' : 'circle-check'}"></i> ${texto}`;
+    el.classList.toggle('erro', !!erro);
+    el.classList.add('aberto');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('aberto'), 4500);
+}
 
 function abrirPdf(url, pagina) {
     window.open(pagina ? `${url}#page=${pagina}` : url, '_blank');
@@ -434,6 +809,7 @@ function fecharLightbox() {
 
 function baixarCsv() {
     if (runAtual) {
-        window.location.href = `/api/painel/${encodeURIComponent(runAtual)}/csv?${queryString()}`;
+        const base = EH_AUDITORIA ? '/api/auditoria/' : '/api/painel/';
+        window.location.href = `${base}${encodeURIComponent(runAtual)}/csv?${queryString()}`;
     }
 }

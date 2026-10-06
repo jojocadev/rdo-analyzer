@@ -192,6 +192,12 @@ select:focus, input:focus {
 .table-scroll { overflow-x: auto; }
 table.pares { width: 100%; border-collapse: collapse; }
 
+/* A coluna de acao nao tinha largura propria: quando o espaco apertava, o
+   navegador a encolhia ate sumir. Uma largura minima resolve sem mexer no
+   resto do layout. */
+th.blk-sel, td.cel-sel { width: 56px; }
+th.blk-fp               { min-width: 104px; white-space: normal; }
+
 table.pares thead .grupo th {
     font-size: .68rem; font-weight: 700; letter-spacing: .09em;
     text-transform: uppercase; padding: .55rem .9rem; text-align: center;
@@ -200,7 +206,7 @@ table.pares thead .grupo th {
 th.blk-de   { background: var(--de);   color: #8a6417; border-right: 1px solid var(--de-line); }
 th.blk-meio { background: var(--meio); color: #1a5cab; border-right: 1px solid var(--meio-line); }
 th.blk-para { background: var(--para); color: #146c46; border-right: 1px solid var(--para-line); }
-th.blk-fp   { background: var(--surface-3); color: var(--text-2); }
+th.blk-fp   { background: var(--surface-3); color: var(--text-2); min-width: 96px; }
 
 table.pares thead .cols th {
     font-size: .67rem; font-weight: 600; letter-spacing: .05em;
@@ -242,11 +248,13 @@ tr:hover td.cel-de, tr:hover td.cel-meio, tr:hover td.cel-para { background: var
 .tag-mesmo  { background: var(--red-soft);    color: var(--red); }
 .tag-grave  { background: var(--red);         color: #fff; }
 .tag-alerta { background: var(--amber);       color: #fff; }
+.tag-geo    { background: #7c5cd6;            color: #fff; }
 
 .pdf-btn.is-divergente { border-color: var(--amber); background: var(--amber-soft); }
 
 /* miniaturas */
-.thumbs { display: flex; gap: .4rem; flex-wrap: wrap; max-width: 330px; }
+/* 2 miniaturas + o contador cabem numa linha so: 3 x 58px + gaps */
+.thumbs { display: flex; gap: .4rem; flex-wrap: nowrap; max-width: 190px; }
 .thumbs img {
     width: 58px; height: 44px; object-fit: cover; cursor: zoom-in;
     border: 1px solid var(--border-strong); border-radius: 5px;
@@ -267,9 +275,15 @@ tr:hover td.cel-de, tr:hover td.cel-meio, tr:hover td.cel-para { background: var
 
 .pdf-list { display: flex; flex-direction: column; gap: .3rem; margin-top: .5rem; }
 .pdf-btn {
-    display: inline-flex; align-items: center; gap: .4rem; align-self: flex-start;
-    max-width: 100%;
+    display: inline-flex; align-items: flex-start; gap: .4rem; align-self: flex-start;
+    /* Teto de largura: sem isso o nome longo do PDF define a largura da coluna. */
+    max-width: 186px; white-space: normal; text-align: left; line-height: 1.25;
 }
+/* Nome do PDF numa linha e as paginas na de baixo: em coluna estreita o texto
+   corrido quebrava em lugares ruins ("PDF 2106- / 5810"). */
+.pdf-txt { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; }
+.pdf-nome { white-space: nowrap; font-weight: 600; }
+.pdf-pags { color: inherit; opacity: .75; white-space: nowrap; font-size: .72rem; }
 .pdf-btn small { color: inherit; opacity: .8; }
 
 /* toggle de falso positivo */
@@ -328,3 +342,137 @@ tr:hover td.cel-de, tr:hover td.cel-meio, tr:hover td.cel-para { background: var
     .wrap { padding: 1rem; }
     .field.wide { grid-column: span 1; }
 }
+
+/* ---------------------- seleção para auditoria ------------------------- */
+
+th.blk-sel {
+    background: var(--surface-3); color: var(--text-2);
+    border-right: 1px solid var(--border);
+}
+td.cel-sel { text-align: center; vertical-align: middle; }
+
+.sel-box { display: inline-flex; padding: .3rem; cursor: pointer; }
+.sel-box input {
+    width: 17px; height: 17px; accent-color: var(--brand); cursor: pointer;
+}
+
+/* A linha selecionada precisa se distinguir mesmo quando também está marcada
+   como falso positivo, que já esmaece a linha. */
+table.pares tbody tr.is-sel td { background: var(--brand-soft); }
+table.pares tbody tr.is-sel.is-fp td { opacity: .78; }
+table.pares tbody tr.is-sel td.cel-sel { box-shadow: inset 3px 0 0 var(--brand); }
+
+.sel-bar {
+    display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+    padding: .4rem .7rem; border-radius: var(--radius-sm);
+    background: var(--brand-soft); border: 1px solid #cfe0fb;
+    font-size: .84rem; color: var(--brand-dark);
+}
+.sel-bar strong { font-variant-numeric: tabular-nums; }
+
+.btn-auditoria {
+    background: var(--purple); border-color: var(--purple); color: #fff;
+}
+.btn-auditoria:hover:not(:disabled) { filter: brightness(.93); }
+.btn-auditoria:disabled { background: var(--surface-3); border-color: var(--border-strong); color: var(--text-3); }
+
+.sel-todos {
+    display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
+    /* o rotulo do cabecalho e caixa-alta pequena como as outras colunas */
+    font: inherit;
+}
+.sel-todos input { width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer; }
+
+/* ------------------------- modal de envio ------------------------------ */
+
+/* Substitui prompt()/confirm(): os dialogos nativos podem ser bloqueados pelo
+   navegador ("impedir que esta pagina crie caixas de dialogo"), e quando isso
+   acontece o clique nao faz nada e o usuario nao entende o porque. */
+.modal {
+    position: fixed; inset: 0; z-index: 95;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+    background: rgba(16, 24, 36, .55);
+}
+.modal[hidden] { display: none; }
+.modal-box {
+    width: 100%; max-width: 480px; padding: 1.4rem 1.5rem;
+    background: var(--surface); border-radius: var(--radius);
+    box-shadow: 0 12px 40px rgba(16, 24, 36, .25);
+}
+.modal-box h2 {
+    margin: 0 0 .6rem; font-size: 1.05rem; font-weight: 650;
+    display: flex; align-items: center; gap: .5rem;
+}
+.modal-resumo {
+    margin: 0 0 1rem; padding: .7rem .85rem; font-size: .88rem;
+    background: var(--brand-soft); color: var(--brand-dark);
+    border-radius: var(--radius-sm);
+}
+.modal-box label {
+    display: block; margin-bottom: .3rem;
+    font-size: .74rem; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text-3);
+}
+.modal-box textarea {
+    width: 100%; padding: .55rem .7rem; font: inherit; font-size: .88rem;
+    color: var(--text); background: var(--surface); resize: vertical;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    outline: none;
+}
+.modal-box textarea:focus {
+    border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.modal-erro {
+    margin-top: .8rem; padding: .6rem .8rem; font-size: .85rem;
+    background: var(--red-soft); color: var(--red); border-radius: var(--radius-sm);
+}
+.modal-acoes {
+    display: flex; justify-content: flex-end; gap: .55rem; margin-top: 1.2rem;
+}
+
+/* Aviso de confirmacao: aparece no canto e some sozinho, sem tirar o usuario
+   da pagina nem exigir um clique para seguir. */
+.toast {
+    position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 96;
+    display: flex; align-items: center; gap: .5rem;
+    padding: .7rem 1rem; border-radius: var(--radius-sm);
+    background: var(--green); color: #fff; font-size: .88rem; font-weight: 550;
+    box-shadow: var(--shadow-md);
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .18s, transform .18s;
+}
+.toast.aberto { opacity: 1; transform: translateY(0); }
+
+/* ---------------------- coluna Documentação ---------------------------- */
+
+th.blk-doc { background: var(--surface-3); color: var(--text-2); min-width: 168px; }
+td.cel-doc { min-width: 168px; }
+
+.doc-col { display: flex; flex-direction: column; gap: .6rem; }
+.doc-escola {
+    display: flex; flex-direction: column; gap: .25rem; align-items: flex-start;
+    padding: .45rem .55rem; border-radius: var(--radius-sm);
+    background: var(--surface-2); border: 1px solid var(--border);
+}
+.doc-inep {
+    font-size: .78rem; font-weight: 700; color: var(--brand);
+    font-variant-numeric: tabular-nums;
+}
+.doc-add { cursor: pointer; font-size: .74rem; padding: .3rem .55rem; }
+
+.doc-item {
+    display: flex; align-items: center; gap: .3rem; max-width: 100%;
+    font-size: .72rem;
+}
+.doc-item a {
+    color: var(--green); text-decoration: none; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; max-width: 118px;
+}
+.doc-item a:hover { text-decoration: underline; }
+.doc-x {
+    border: 0; background: transparent; cursor: pointer; line-height: 1;
+    color: var(--text-3); font-size: 1rem; padding: 0 .15rem;
+}
+.doc-x:hover { color: var(--red); }
+
+.toast.erro { background: var(--red); }
