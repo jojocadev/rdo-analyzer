@@ -127,6 +127,16 @@ def classificar_medidas(m, tem_coordenada=False):
         return EM_BRANCO
     if m["branco"] >= 0.88 and m["saturacao"] < 12:
         return ASSINATURA
+
+    # Proporcao A4: e pagina de documento, nao captura de tela. Pega a capa com
+    # a logo do programa, que sozinha respondia por 946 pares numa amostra de 80
+    # escolas, e a folha "Aviso de desativacao".
+    largura, altura = m["largura"] or 0, m["altura"] or 0
+    if largura and altura:
+        razao = largura / altura
+        if abs(razao - 0.707) < 0.02 or abs(razao - 1.414) < 0.03:
+            return DOCUMENTO
+
     if m["saturacao"] < 12:
         return DOCUMENTO
     return PRINT_TELA
