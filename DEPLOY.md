@@ -29,8 +29,13 @@ Há dois backends, escolhidos sozinhos na subida:
 | `storage` | padrão, sem DDL nenhum | guarda tudo, mas sem consulta SQL |
 
 O `storage` grava os mesmos registros como objetos JSON no bucket
-`auditoria-docs`. Não perde nada — basta o container não ter o disco que os
-dados voltam do Supabase, inclusive os arquivos anexados.
+`auditoria-docs`, que ocupa alguns KB. Não perde nada: sem o disco local, os
+registros voltam do Supabase.
+
+**Os arquivos de resolução ficam no disco da VPS**, não no Supabase — em
+`/app/auditoria/documentos/<envio>/<inep>/`. O banco guarda nome, tamanho e
+`sha256` de cada um, então o registro de que o documento existiu sobrevive de
+qualquer forma; mas **o arquivo em si depende do volume estar montado**.
 
 **Para habilitar consulta por SQL** (opcional, recomendado): cole
 [sql/auditoria.sql](sql/auditoria.sql) no SQL Editor do projeto e execute; cria
@@ -61,7 +66,7 @@ Os dados ficam fora da imagem. Sem volume, cada redeploy apaga tudo:
 | `/app/extracted_images` | miniaturas que o painel exibe — **é o que ocupa espaço** |
 | `/app/historico` | histórico das execuções |
 | `/app/cache_extracao` | cache de download e coordenadas já lidas pelo OCR |
-| `/app/auditoria` | cache local dos envios e fila de reenvio |
+| `/app/auditoria` | **documentos de resolução anexados** + cache dos envios |
 
 **Dimensionamento:** uma varredura completa da fase 5 gerou aqui ~53 GB em
 ~518 mil miniaturas. Reserve pelo menos **100 GB** se a VPS for guardar mais de

@@ -326,7 +326,10 @@ def _storage_pares_do_envio(envio_id):
 
 
 def _storage_salvar_documento(doc, conteudo):
-    subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
+    # O arquivo em si fica no disco da VPS, por decisao de projeto: encher o
+    # Supabase com PDF de parecer nao compensa. Aqui vai so o metadado, que
+    # inclui tamanho e sha256 — da para provar o que foi anexado mesmo se o
+    # arquivo se perder.
     indice = _ler_json(_obj_documentos(doc["envio_id"])) or []
     limpo = {k: v for k, v in doc.items() if k not in ("aviso", "gravado_no_banco")}
     indice = [d for d in indice if d.get("doc_id") != doc["doc_id"]] + [limpo]
@@ -339,15 +342,8 @@ def _storage_listar_documentos(envio_id):
 
 def _storage_excluir_documento(envio_id, doc_id):
     indice = _ler_json(_obj_documentos(envio_id)) or []
-    alvo = next((d for d in indice if d.get("doc_id") == doc_id), None)
     _gravar_json(_obj_documentos(envio_id),
                  [d for d in indice if d.get("doc_id") != doc_id])
-    if alvo and alvo.get("arquivo_path"):
-        try:
-            _chamar(f"{_STORAGE}/object/{BUCKET}", method="DELETE",
-                    data={"prefixes": [alvo["arquivo_path"]]})
-        except BancoIndisponivel:
-            pass
 
 
 def _storage_excluir_envio(envio_id):
@@ -497,7 +493,10 @@ def salvar_documento(doc, conteudo):
         "par_id": doc.get("par_id"),
         "arquivo_nome": doc["arquivo_nome"],
         "arquivo_path": doc["arquivo_path"],
-        "bucket": BUCKET,
+        # Onde o arquivo mora de fato. Fica explicito na linha para quem
+        # consultar o banco nao achar que ele esta no Supabase.
+        "bucket": "disco-vps",
+        "sha256": doc.get("sha256"),
         "tamanho_bytes": doc.get("tamanho_bytes"),
         "tipo_mime": doc.get("tipo_mime"),
         "observacao": doc.get("observacao"),
@@ -508,7 +507,6 @@ def salvar_documento(doc, conteudo):
         if backend() == STORAGE_BACKEND:
             _storage_salvar_documento(doc, conteudo)
         else:
-            subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
             _gravar("documento", [linha])
         registrar_evento("documento_anexado", envio_id=doc["envio_id"],
                          doc_id=doc["doc_id"], inep=doc["inep"],

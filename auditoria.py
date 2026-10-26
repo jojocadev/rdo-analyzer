@@ -17,6 +17,7 @@ Quando o banco falha, a operação não é dada como concluída em silêncio: o
 chamador recebe um aviso e o registro entra na fila de reenvio.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -290,6 +291,9 @@ def salvar_documento(envio_id, inep, nome_arquivo, conteudo,
         "par_id": par_id or None,
         "arquivo_nome": os.path.basename(nome_arquivo),
         "arquivo_path": f"{envio_id}/{inep}/{seguro}",
+        # Impressao digital do que foi anexado: permite provar depois que o
+        # arquivo em disco e o mesmo que a auditoria registrou.
+        "sha256": hashlib.sha256(conteudo).hexdigest(),
         "tamanho_bytes": len(conteudo),
         "tipo_mime": mimetypes.guess_type(nome_arquivo)[0] or "application/octet-stream",
         "observacao": observacao or None,
@@ -339,22 +343,15 @@ def caminho_documento(arquivo_path):
     """
     Caminho absoluto de um documento, barrando saida da pasta de documentos.
 
-    Se o arquivo nao esta no disco (container novo), baixa do Storage para o
-    mesmo lugar e segue — assim o download funciona mesmo apos um redeploy.
+    O arquivo mora no disco da VPS, por decisao de projeto — o Supabase guarda
+    so o metadado. Isso significa que `auditoria/documentos/` PRECISA estar num
+    volume: sem volume, o redeploy leva os arquivos junto. O registro de que
+    existiram sobrevive no banco, com nome, tamanho e sha256.
     """
     destino = os.path.normpath(os.path.join(DIR_DOCS, arquivo_path))
     if not destino.startswith(os.path.normpath(DIR_DOCS) + os.sep):
         raise ValueError("Caminho inválido.")
-    if os.path.exists(destino):
-        return destino
-
-    conteudo = auditoria_db.baixar_arquivo(arquivo_path) if auditoria_db.disponivel() else None
-    if conteudo:
-        os.makedirs(os.path.dirname(destino), exist_ok=True)
-        with open(destino, "wb") as fh:
-            fh.write(conteudo)
-        return destino
-    return None
+    return destino if os.path.exists(destino) else None
 
 
 def excluir_documento(envio_id, doc_id):

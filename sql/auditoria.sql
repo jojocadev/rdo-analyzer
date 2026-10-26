@@ -52,7 +52,11 @@ create table if not exists public.auditoria_envio_pares (
 );
 
 -- Documento de resolucao anexado por INEP depois da auditoria.
--- O arquivo em si vai para o bucket `auditoria-docs`; aqui fica o metadado.
+--
+-- O ARQUIVO fica no disco da VPS (auditoria/documentos/<envio>/<inep>/), para
+-- nao encher o Supabase com PDF de parecer. Aqui fica so o metadado — mas com
+-- tamanho e sha256, entao da para provar o que foi anexado mesmo que o arquivo
+-- se perca. Isso torna o volume de /app/auditoria obrigatorio na VPS.
 create table if not exists public.auditoria_documentos (
     doc_id          text primary key,
     envio_id        text not null
@@ -61,7 +65,8 @@ create table if not exists public.auditoria_documentos (
     par_id          text,
     arquivo_nome    text not null,
     arquivo_path    text not null,
-    bucket          text not null default 'auditoria-docs',
+    bucket          text not null default 'disco-vps',
+    sha256          text,
     tamanho_bytes   bigint,
     tipo_mime       text,
     observacao      text,
