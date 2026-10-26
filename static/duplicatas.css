@@ -491,3 +491,12 @@ td.cel-doc { min-width: 168px; }
     color: #7a4a06; font-size: .86rem;
 }
 .faixa-alerta .btn { margin-left: auto; }
+
+/* Faixa neutra: backend alternativo ativo, salvando normalmente. */
+.faixa-info {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin-bottom: 1rem; padding: .7rem .9rem;
+    background: #eef4fb; border: 1px solid #bcd4ec; border-radius: 10px;
+    color: #2b4c6e; font-size: .86rem;
+}
+.faixa-info .btn { margin-left: auto; }

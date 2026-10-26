@@ -851,7 +851,9 @@ function acompanharGeo() {
 async function conferirPersistencia() {
     let d;
     try { d = await (await fetch('/api/auditoria/status')).json(); } catch (e) { return; }
-    if (d.banco && !d.pendentes) {
+
+    // Tabelas e sem pendência: está tudo no lugar, nada a dizer.
+    if (d.banco && d.backend === 'tabelas' && !d.pendentes) {
         const velha = $('faixaBanco');
         if (velha) velha.remove();
         return;
@@ -861,14 +863,20 @@ async function conferirPersistencia() {
     if (!el) {
         el = document.createElement('div');
         el.id = 'faixaBanco';
-        el.className = 'faixa-alerta';
         document.querySelector('.wrap').prepend(el);
     }
 
+    // Storage salvando e nada pendente não é alarme: é informação.
+    const grave = !d.banco || d.pendentes;
+    el.className = grave ? 'faixa-alerta' : 'faixa-info';
+
     const partes = [];
-    if (!d.banco) partes.push(`<strong>Auditoria não está sendo salva no banco.</strong> ${d.motivo || ''}`);
+    if (!d.banco) partes.push(`<strong>A auditoria não está sendo salva.</strong> ${d.motivo || ''}`);
+    else if (d.backend === 'storage') partes.push(`Auditoria salva no Storage do Supabase. ${d.motivo || ''}`);
     if (d.pendentes) partes.push(`${d.pendentes} registro(s) aguardando reenvio.`);
-    el.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${partes.join(' ')}`
+
+    el.innerHTML = `<i class="fa-solid fa-${grave ? 'triangle-exclamation' : 'circle-info'}"></i> `
+        + partes.join(' ')
         + (d.pendentes ? ` <button class="btn btn-sm" id="btnReenviar">Reenviar agora</button>` : '');
 
     const btn = $('btnReenviar');

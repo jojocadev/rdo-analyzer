@@ -2,17 +2,31 @@
 Persistencia da auditoria no Supabase.
 
 O disco continua gravando (serve de cache de leitura e de rede de seguranca
-quando o banco esta fora do ar), mas o banco e a fonte da verdade: e o unico
-lugar que sobrevive a um redeploy da VPS, e o unico que guarda o par por inteiro
-em vez de um ponteiro para `historico/<run_id>/grupos.json`.
+quando o Supabase esta fora do ar), mas o Supabase e a fonte da verdade: e o
+unico lugar que sobrevive a um redeploy da VPS, e o unico que guarda o par por
+inteiro em vez de um ponteiro para `historico/<run_id>/grupos.json`.
 
-Quando a gravacao no banco falha, a operacao NAO e dada como concluida em
+DOIS BACKENDS, escolhidos automaticamente:
+
+    tabelas   Preferido. auditoria_envios, auditoria_envio_pares,
+              auditoria_documentos e auditoria_eventos. Permite consultar por
+              INEP, por fornecedor, cruzar com escolas_conectadas. Criado por
+              sql/auditoria.sql — DDL nao passa pelo PostgREST, entao o SQL
+              precisa ser executado no painel do Supabase.
+
+    storage   Usado enquanto as tabelas nao existirem. Grava os mesmos registros
+              como objetos JSON no bucket `auditoria-docs`, que a service_role
+              cria e escreve sem DDL nenhum. Guarda tudo e nao perde nada; so
+              nao da para consultar por SQL.
+
+    Ao subir, a aplicacao testa as tabelas; se estiverem la, usa tabelas, senao
+    cai para storage. Quem chama nao precisa saber qual esta ativo. Rodar o SQL
+    depois promove o backend sozinho, e migrar_auditoria.py leva para as tabelas
+    o que estiver no storage.
+
+Quando nem um nem outro responde, a operacao NAO e dada como concluida em
 silencio: o chamador recebe o erro e o registro entra em `auditoria/_pendentes/`
-para ser reenviado depois. Perder movimentacao e o unico desfecho inaceitavel
-aqui.
-
-As tabelas sao criadas por sql/auditoria.sql — nao da para faze-lo por aqui,
-porque o PostgREST nao executa DDL.
+para ser reenviado. Perder movimentacao e o unico desfecho inaceitavel aqui.
 """
 
 import io
@@ -73,14 +87,26 @@ def _chamar(url, data=None, method="GET", extra=None, binario=None, timeout=60):
 # Disponibilidade
 # --------------------------------------------------------------------------- #
 
-_estado = {"checado_em": 0, "ok": False, "motivo": ""}
+TABELAS_BACKEND = "tabelas"
+STORAGE_BACKEND = "storage"
+
+_estado = {"checado_em": 0, "ok": False, "motivo": "", "backend": ""}
 _VALIDADE_CHECAGEM = 30  # segundos
+
+
+def _tabelas_existem():
+    try:
+        for tabela in TABELAS:
+            _chamar(f"{SUPABASE_URL}/{tabela}?select=1&limit=1", timeout=20)
+        return True
+    except BancoIndisponivel:
+        return False
 
 
 def disponivel(forcar=False):
     """
-    Diz se da para gravar no banco agora. O resultado fica em cache por 30 s
-    para a tela nao disparar uma ida ao Supabase a cada clique.
+    Diz se da para gravar agora, por qualquer um dos backends. O resultado fica
+    em cache por 30 s para a tela nao ir ao Supabase a cada clique.
     """
     agora = time.time()
     if not forcar and agora - _estado["checado_em"] < _VALIDADE_CHECAGEM:
@@ -88,18 +114,32 @@ def disponivel(forcar=False):
 
     _estado["checado_em"] = agora
     if not SERVICE_KEY:
-        _estado.update(ok=False, motivo="SUPABASE_SERVICE_KEY não está definida.")
+        _estado.update(ok=False, backend="",
+                       motivo="SUPABASE_SERVICE_KEY não está definida.")
         return False
-    try:
-        for tabela in TABELAS:
-            _chamar(f"{SUPABASE_URL}/{tabela}?select=1&limit=1", timeout=20)
-        _estado.update(ok=True, motivo="")
-    except BancoIndisponivel as e:
-        falta = "PGRST205" in str(e)
-        _estado.update(ok=False, motivo=(
-            "As tabelas da auditoria ainda não existem. Rode sql/auditoria.sql "
-            "no SQL Editor do Supabase." if falta else str(e)))
-    return _estado["ok"]
+
+    if _tabelas_existem():
+        _estado.update(ok=True, backend=TABELAS_BACKEND, motivo="")
+        return True
+
+    # Sem as tabelas, o Storage sustenta tudo sozinho — e a service_role cria o
+    # bucket sem precisar de DDL.
+    if garantir_bucket():
+        _estado.update(ok=True, backend=STORAGE_BACKEND, motivo=(
+            "Gravando no Storage do Supabase. Para consultar por SQL, rode "
+            "sql/auditoria.sql e depois migrar_auditoria.py."))
+        return True
+
+    _estado.update(ok=False, backend="", motivo=(
+        "O Supabase não respondeu: nem as tabelas da auditoria nem o Storage "
+        "estão acessíveis."))
+    return False
+
+
+def backend():
+    """'tabelas', 'storage' ou '' — qual esta ativo agora."""
+    disponivel()
+    return _estado["backend"]
 
 
 def motivo_indisponivel():
@@ -162,6 +202,31 @@ _CONFLITO = {
 
 
 def _gravar(tipo, carga):
+    """Grava no backend ativo. `envio_completo` e a forma neutra do reenvio."""
+    if tipo == "envio_completo":
+        if backend() == STORAGE_BACKEND:
+            _storage_salvar_envio(carga["envio"], carga["pares"])
+        else:
+            _gravar("envio", [carga["cabecalho"]])
+            if carga.get("linhas"):
+                _gravar("pares", carga["linhas"])
+        return None
+
+    if backend() == STORAGE_BACKEND:
+        if tipo == "evento":
+            for linha in carga:
+                _storage_registrar_evento(linha)
+            return None
+        # Documento pendente: o arquivo ja subiu ou vai subir junto do metadado;
+        # aqui so o indice precisa ser refeito.
+        if tipo == "documento":
+            for linha in carga:
+                indice = _ler_json(_obj_documentos(linha["envio_id"])) or []
+                indice = [d for d in indice
+                          if d.get("doc_id") != linha["doc_id"]] + [linha]
+                _gravar_json(_obj_documentos(linha["envio_id"]), indice)
+            return None
+
     tabela = _TABELA_DO_TIPO[tipo]
     url = f"{SUPABASE_URL}/{tabela}"
     extra = {"Prefer": "return=minimal"}
@@ -169,6 +234,132 @@ def _gravar(tipo, carga):
         url += f"?on_conflict={_CONFLITO[tipo]}"
         extra["Prefer"] = "resolution=merge-duplicates,return=minimal"
     return _chamar(url, data=carga, method="POST", extra=extra)
+
+
+# --------------------------------------------------------------------------- #
+# Backend de Storage
+#
+# Mesmos registros, gravados como objetos JSON no bucket. Layout:
+#
+#   registro/envios/<envio_id>.json        cabecalho + copia integral dos pares
+#   registro/documentos/<envio_id>.json    indice dos documentos daquele envio
+#   registro/eventos/<data>/<ts>_<tipo>.json   trilha, um objeto por evento
+#   <envio_id>/<inep>/<arquivo>            os arquivos de resolucao
+#
+# Cada evento vira um objeto proprio, nunca reescrito: e o que garante que a
+# movimentacao nao se perca nem quando o envio e removido depois.
+# --------------------------------------------------------------------------- #
+
+_PREFIXO = "registro"
+
+
+def _obj_envio(envio_id):
+    return f"{_PREFIXO}/envios/{envio_id}.json"
+
+
+def _obj_documentos(envio_id):
+    return f"{_PREFIXO}/documentos/{envio_id}.json"
+
+
+def _ler_json(caminho):
+    bruto = baixar_arquivo(caminho)
+    if not bruto:
+        return None
+    try:
+        return json.loads(bruto.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _gravar_json(caminho, dado):
+    subir_arquivo(caminho, json.dumps(dado, ensure_ascii=False).encode("utf-8"),
+                  "application/json")
+
+
+def _listar_objetos(prefixo):
+    """Nomes dos objetos sob um prefixo. O list do Storage pagina de 100."""
+    nomes, offset = [], 0
+    while True:
+        lote = _chamar(f"{_STORAGE}/object/list/{BUCKET}", method="POST",
+                       data={"prefix": prefixo, "limit": 100, "offset": offset})
+        if not lote:
+            break
+        nomes += [i["name"] for i in lote if i.get("name")]
+        if len(lote) < 100:
+            break
+        offset += 100
+    return nomes
+
+
+def _storage_salvar_envio(envio, pares):
+    registro = {k: v for k, v in envio.items()
+                if k not in ("pares", "aviso", "gravado_no_banco")}
+    registro["pares"] = pares
+    _gravar_json(_obj_envio(envio["envio_id"]), registro)
+
+
+def _storage_listar_envios():
+    nomes = _listar_objetos(f"{_PREFIXO}/envios")
+    envios = []
+    for nome in nomes:
+        if not nome.endswith(".json"):
+            continue
+        dado = _ler_json(f"{_PREFIXO}/envios/{nome}")
+        if isinstance(dado, dict) and dado.get("envio_id"):
+            dado.pop("pares", None)      # a lista nao precisa das evidencias
+            envios.append(dado)
+    envios.sort(key=lambda e: str(e.get("criado_em") or ""), reverse=True)
+    return envios
+
+
+def _storage_carregar_envio(envio_id):
+    dado = _ler_json(_obj_envio(envio_id))
+    if isinstance(dado, dict):
+        dado.pop("pares", None)
+        return dado
+    return None
+
+
+def _storage_pares_do_envio(envio_id):
+    dado = _ler_json(_obj_envio(envio_id))
+    return (dado or {}).get("pares") or []
+
+
+def _storage_salvar_documento(doc, conteudo):
+    subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
+    indice = _ler_json(_obj_documentos(doc["envio_id"])) or []
+    limpo = {k: v for k, v in doc.items() if k not in ("aviso", "gravado_no_banco")}
+    indice = [d for d in indice if d.get("doc_id") != doc["doc_id"]] + [limpo]
+    _gravar_json(_obj_documentos(doc["envio_id"]), indice)
+
+
+def _storage_listar_documentos(envio_id):
+    return _ler_json(_obj_documentos(envio_id)) or []
+
+
+def _storage_excluir_documento(envio_id, doc_id):
+    indice = _ler_json(_obj_documentos(envio_id)) or []
+    alvo = next((d for d in indice if d.get("doc_id") == doc_id), None)
+    _gravar_json(_obj_documentos(envio_id),
+                 [d for d in indice if d.get("doc_id") != doc_id])
+    if alvo and alvo.get("arquivo_path"):
+        try:
+            _chamar(f"{_STORAGE}/object/{BUCKET}", method="DELETE",
+                    data={"prefixes": [alvo["arquivo_path"]]})
+        except BancoIndisponivel:
+            pass
+
+
+def _storage_excluir_envio(envio_id):
+    _chamar(f"{_STORAGE}/object/{BUCKET}", method="DELETE",
+            data={"prefixes": [_obj_envio(envio_id)]})
+
+
+def _storage_registrar_evento(linha):
+    carimbo = time.strftime("%Y%m%d_%H%M%S")
+    chave = (f"{_PREFIXO}/eventos/{time.strftime('%Y%m%d')}/"
+             f"{carimbo}_{linha['tipo']}_{int(time.time() * 1000) % 100000}.json")
+    _gravar_json(chave, dict(linha, criado_em=time.strftime("%Y-%m-%d %H:%M:%S")))
 
 
 # --------------------------------------------------------------------------- #
@@ -223,17 +414,22 @@ def salvar_envio(envio, pares):
     linhas = [_linha_do_par(envio["envio_id"], p) for p in pares]
 
     try:
-        _gravar("envio", [cabecalho])
-        if linhas:
-            _gravar("pares", linhas)
+        if backend() == STORAGE_BACKEND:
+            _storage_salvar_envio(envio, pares)
+        else:
+            _gravar("envio", [cabecalho])
+            if linhas:
+                _gravar("pares", linhas)
         registrar_evento("envio_criado", envio_id=envio["envio_id"],
                          detalhe={"pares": len(linhas),
                                   "ineps": envio.get("resumo", {}).get("ineps", [])})
         return True
     except BancoIndisponivel:
-        _guardar_pendente("envio", [cabecalho])
-        if linhas:
-            _guardar_pendente("pares", linhas)
+        # Um item so, com cabecalho e pares juntos: o reenvio precisa dos dois
+        # para montar tanto a linha da tabela quanto o objeto do Storage.
+        _guardar_pendente("envio_completo",
+                          {"envio": envio, "pares": pares, "cabecalho": cabecalho,
+                           "linhas": linhas})
         raise
 
 
@@ -244,7 +440,10 @@ def registrar_evento(tipo, envio_id=None, par_id=None, doc_id=None,
     linha = {"tipo": tipo, "envio_id": envio_id, "par_id": par_id,
              "doc_id": doc_id, "inep": inep, "detalhe": detalhe or {}}
     try:
-        _gravar("evento", [linha])
+        if backend() == STORAGE_BACKEND:
+            _storage_registrar_evento(linha)
+        else:
+            _gravar("evento", [linha])
         return True
     except BancoIndisponivel:
         _guardar_pendente("evento", [linha])
@@ -306,8 +505,11 @@ def salvar_documento(doc, conteudo):
         "criado_em": doc.get("criado_em"),
     }
     try:
-        subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
-        _gravar("documento", [linha])
+        if backend() == STORAGE_BACKEND:
+            _storage_salvar_documento(doc, conteudo)
+        else:
+            subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
+            _gravar("documento", [linha])
         registrar_evento("documento_anexado", envio_id=doc["envio_id"],
                          doc_id=doc["doc_id"], inep=doc["inep"],
                          par_id=doc.get("par_id"),
@@ -324,19 +526,25 @@ def salvar_documento(doc, conteudo):
 # --------------------------------------------------------------------------- #
 
 def listar_envios():
+    if backend() == STORAGE_BACKEND:
+        return _storage_listar_envios()
     dados = _chamar(f"{SUPABASE_URL}/auditoria_envios"
                     f"?select=*&order=criado_em.desc&limit=500")
     return dados or []
 
 
 def carregar_envio(envio_id):
+    if backend() == STORAGE_BACKEND:
+        return _storage_carregar_envio(envio_id)
     alvo = urllib.parse.quote(envio_id)
     dados = _chamar(f"{SUPABASE_URL}/auditoria_envios?select=*&envio_id=eq.{alvo}&limit=1")
     return (dados or [None])[0]
 
 
 def pares_do_envio(envio_id):
-    """Pares reconstruidos do snapshot — nao toca no historico em disco."""
+    """Pares reconstruidos da copia — nao toca no historico em disco."""
+    if backend() == STORAGE_BACKEND:
+        return _storage_pares_do_envio(envio_id)
     alvo = urllib.parse.quote(envio_id)
     linhas = _chamar(f"{SUPABASE_URL}/auditoria_envio_pares"
                      f"?select=snapshot&envio_id=eq.{alvo}&order=id&limit=5000")
@@ -344,6 +552,8 @@ def pares_do_envio(envio_id):
 
 
 def listar_documentos(envio_id):
+    if backend() == STORAGE_BACKEND:
+        return _storage_listar_documentos(envio_id)
     alvo = urllib.parse.quote(envio_id)
     linhas = _chamar(f"{SUPABASE_URL}/auditoria_documentos"
                      f"?select=*&envio_id=eq.{alvo}&order=criado_em.desc&limit=1000")
@@ -351,9 +561,12 @@ def listar_documentos(envio_id):
 
 
 def excluir_documento(envio_id, doc_id):
-    alvo = urllib.parse.quote(doc_id)
-    _chamar(f"{SUPABASE_URL}/auditoria_documentos?doc_id=eq.{alvo}", method="DELETE",
-            extra={"Prefer": "return=minimal"})
+    if backend() == STORAGE_BACKEND:
+        _storage_excluir_documento(envio_id, doc_id)
+    else:
+        alvo = urllib.parse.quote(doc_id)
+        _chamar(f"{SUPABASE_URL}/auditoria_documentos?doc_id=eq.{alvo}",
+                method="DELETE", extra={"Prefer": "return=minimal"})
     registrar_evento("documento_removido", envio_id=envio_id, doc_id=doc_id)
     return True
 
@@ -361,8 +574,11 @@ def excluir_documento(envio_id, doc_id):
 def excluir_envio(envio_id):
     """Remove o envio; a trilha de eventos permanece, por ser o registro de que
     ele existiu."""
-    alvo = urllib.parse.quote(envio_id)
     registrar_evento("envio_removido", envio_id=envio_id)
-    _chamar(f"{SUPABASE_URL}/auditoria_envios?envio_id=eq.{alvo}", method="DELETE",
-            extra={"Prefer": "return=minimal"})
+    if backend() == STORAGE_BACKEND:
+        _storage_excluir_envio(envio_id)
+    else:
+        alvo = urllib.parse.quote(envio_id)
+        _chamar(f"{SUPABASE_URL}/auditoria_envios?envio_id=eq.{alvo}",
+                method="DELETE", extra={"Prefer": "return=minimal"})
     return True

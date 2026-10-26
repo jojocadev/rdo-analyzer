@@ -16,18 +16,26 @@ Sem a segunda variável o painel ainda sobe e serve o histórico já em disco, m
 qualquer varredura nova responde `401 Unauthorized`. Para conferir depois do
 deploy: `GET /api/health` devolve `{"supabase": true}` quando a chave chegou.
 
-## 1b. Tabelas da auditoria (obrigatório)
+## 1b. Onde a auditoria é salva
 
-Abra o **SQL Editor** do projeto RDO Escolas Sisop, cole o conteúdo de
-[sql/auditoria.sql](sql/auditoria.sql) e execute. Cria quatro tabelas e liga RLS.
-Pode rodar mais de uma vez.
+Nada a fazer: **já funciona com a service_role**. O que vai para auditoria e o
+documento de resolução são gravados no Supabase, não só no disco do container.
 
-Sem isso o envio para auditoria fica **só no disco do container** — e some no
-próximo redeploy. O sistema não falha calado nesse caso: a tela mostra uma faixa
-laranja no topo, o envio acusa "não chegou ao banco" e o registro entra numa
-fila de reenvio. Mas o certo é rodar o SQL antes de usar.
+Há dois backends, escolhidos sozinhos na subida:
 
-Depois do SQL, uma vez, para levar o que já existe em disco:
+| Backend | Quando | O que dá |
+|---|---|---|
+| `tabelas` | depois de rodar o SQL | consultar por SQL, cruzar com `escolas_conectadas` |
+| `storage` | padrão, sem DDL nenhum | guarda tudo, mas sem consulta SQL |
+
+O `storage` grava os mesmos registros como objetos JSON no bucket
+`auditoria-docs`. Não perde nada — basta o container não ter o disco que os
+dados voltam do Supabase, inclusive os arquivos anexados.
+
+**Para habilitar consulta por SQL** (opcional, recomendado): cole
+[sql/auditoria.sql](sql/auditoria.sql) no SQL Editor do projeto e execute; cria
+quatro tabelas e liga RLS. Depois rode a migração, que promove o que está no
+Storage para as tabelas:
 
 ```bash
 python migrar_auditoria.py --simular   # mostra o que subiria
@@ -37,7 +45,11 @@ python migrar_auditoria.py             # aplica
 Rode na máquina que ainda tem a pasta `historico/` — os envios antigos guardavam
 só ponteiros, e as evidências são remontadas dali na migração.
 
-Conferência rápida depois do deploy: `GET /api/health` deve trazer
+Se o Supabase ficar fora do ar, a operação **não** é dada como concluída em
+silêncio: o registro entra em `auditoria/_pendentes/`, a tela mostra faixa
+laranja com botão "Reenviar agora" e o envio responde avisando.
+
+Conferência depois do deploy: `GET /api/health` deve trazer
 `"auditoria_no_banco": true` e `"auditoria_pendentes": 0`.
 
 ## 2. Volumes

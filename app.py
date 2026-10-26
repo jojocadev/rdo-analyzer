@@ -81,6 +81,7 @@ def health():
         "supabase": bool(SERVICE_KEY),
         "ocr": _ocr_disponivel(),
         "auditoria_no_banco": auditoria_db.disponivel(),
+        "auditoria_backend": auditoria_db.backend(),
         "auditoria_pendentes": len(auditoria_db.listar_pendentes()),
     })
 
@@ -1165,7 +1166,9 @@ def auditoria_status():
     ok = auditoria_db.disponivel()
     return jsonify({
         "banco": ok,
-        "motivo": "" if ok else auditoria_db.motivo_indisponivel(),
+        "backend": auditoria_db.backend(),
+        # Com o Storage ativo o motivo é informativo, não alarme: está salvando.
+        "motivo": auditoria_db.motivo_indisponivel(),
         "pendentes": len(auditoria_db.listar_pendentes()),
     })
 

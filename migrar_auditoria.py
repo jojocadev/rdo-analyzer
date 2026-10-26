@@ -1,12 +1,20 @@
 """
-Leva para o Supabase a auditoria que hoje so existe em disco.
+Leva para o Supabase a auditoria que esta em disco.
 
-Rode UMA VEZ depois de executar sql/auditoria.sql no SQL Editor. Pode rodar de
-novo sem estragar nada: envio e documento sao gravados com upsert pela chave
-natural, entao repetir apenas reescreve a mesma linha.
+Serve para duas situacoes:
+
+    1. Primeira carga. Sobe o que ja existia em disco antes de o Supabase entrar
+       no fluxo. Com o backend de Storage isso funciona de imediato, sem DDL.
+
+    2. Promocao para tabelas. Depois de rodar sql/auditoria.sql, rodar isto de
+       novo regrava tudo nas tabelas — o backend passa a ser `tabelas` sozinho,
+       e a partir dai da para consultar por SQL.
+
+Pode rodar quantas vezes quiser: envio e documento sao gravados pela chave
+natural, entao repetir reescreve a mesma linha em vez de duplicar.
 
 Os envios antigos nao guardavam copia dos pares — eles sao remontados a partir
-do historico da execucao no momento da migracao, e e por isso que esta migracao
+do historico da execucao no momento da migracao, e por isso esta migracao
 precisa rodar na maquina que ainda tem a pasta `historico/`.
 
 Uso:
@@ -37,11 +45,14 @@ def main():
 
     if not auditoria_db.disponivel(forcar=True):
         print("\n[PARADO] " + auditoria_db.motivo_indisponivel())
-        print("\nRode primeiro, no SQL Editor do Supabase:")
-        print("    sql/auditoria.sql")
         return 1
 
-    print("\n>>> Banco acessivel. Garantindo o bucket dos documentos...")
+    alvo = auditoria_db.backend()
+    print(f"\n>>> Supabase acessivel. Backend ativo: {alvo}")
+    if alvo == auditoria_db.STORAGE_BACKEND:
+        print("    Os registros vao como objetos JSON no bucket auditoria-docs.")
+        print("    Para consultar por SQL depois, rode sql/auditoria.sql e repita")
+        print("    esta migracao — ela promove tudo para as tabelas.")
     print("    bucket:", "ok" if auditoria_db.garantir_bucket() else "FALHOU")
 
     envios = auditoria._envios_do_disco()
