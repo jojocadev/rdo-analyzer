@@ -77,9 +77,14 @@ só de dados, mais o processamento. Abaixo de **2 GB de RAM** a varredura falha.
 
 ## 3. Ordem de uso
 
-1. **`/`** — escolher a fase e clicar em extrair. Leva ~35 min na fase 5
-   (download dos PDFs); a análise em si é de segundos. O progresso fica em
+1. **`/`** — escolher a fase e clicar em extrair. Leva ~35 min na fase 5 para
+   baixar os PDFs, mais ~22 min de comparação visual. O progresso fica em
    `/api/fase-status`.
+
+   A comparação visual acha a mesma foto reaproveitada mesmo quando ela foi
+   recortada ou recomprimida, o que o SHA exato não pega: na fase 5 são 195
+   achados a mais sobre os 302 exatos. Para desligar e ganhar os 22 min de
+   volta, mande `somente_identicas: true` no corpo de `/api/scan-fase`.
 2. **`/duplicatas`** — abrir a execução e, se quiser a conferência geográfica,
    clicar em **Conferir coordenadas**. O OCR roda no servidor e marca as fotos
    tiradas fora do raio de 50 m da escola. É demorado na primeira vez; as

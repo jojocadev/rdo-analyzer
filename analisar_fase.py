@@ -77,6 +77,21 @@ CACHE_DIR = os.path.join(BASE_DIR, "extracted_images")
 MIN_WIDTH = 120
 MIN_HEIGHT = 120
 PHASH_THRESHOLD = 8
+
+# Limite usado quando a comparacao visual esta ligada. Medido na fase 5, com as
+# duplas conferidas uma a uma na tela:
+#
+#   distancia 0  123 grupos  a MESMA foto, so recomprimida ou recortada. Real.
+#   distancia 2   33 grupos  idem, com recorte um pouco maior. Real.
+#   distancia 4   26 grupos  equipamento igual em escolas diferentes, fotos
+#                            distintas (datas, coordenadas e angulos diferentes).
+#   distancia 6  189 grupos  inclui heatmap do UniFi, que o classificador ainda
+#                            deixa passar por foto.
+#   distancia 8 1190 grupos  armario de rede generico. Ruido puro.
+#
+# O salto de 26 para 1.190 no limite e assinatura de ruido: quando se raspa o
+# fundo do limiar, casa qualquer coisa parecida. Por isso 2, e nao 8.
+PHASH_VISUAL_THRESHOLD = 2
 LOGO_SHA = "90cb2766e81912dd996d8387e2406a32e333836543dd88fc1845aa188e5bdce4"
 THUMB_MAX = 512  # miniatura/pHash nao precisam da foto em resolucao plena
 
@@ -597,6 +612,7 @@ def find_duplicate_groups(records, mesmo_fornecedor=True, somente_identicas=True
 
     # Une SHAs visualmente semelhantes. Processa em blocos para não estourar a RAM
     # (a matriz completa de 180k x 180k uint64 passaria de 250 GB).
+    visuais = []
     if n >= 2 and not somente_identicas:
         phashes = np.array([int(sha_map[s][0]["phash"], 16) for s in shas], dtype=np.uint64)
         block = 4000
@@ -606,13 +622,24 @@ def find_duplicate_groups(records, mesmo_fornecedor=True, somente_identicas=True
             for j0 in range(i0, n, block):
                 j1 = min(j0 + block, n)
                 dist = _hamming_matrix_cross(block_i, phashes[j0:j1])
-                ii, jj = np.nonzero(dist <= PHASH_THRESHOLD)
+                ii, jj = np.nonzero(dist <= PHASH_VISUAL_THRESHOLD)
                 for a, b in zip(ii + i0, jj + j0):
                     if a < b:
-                        union(int(a), int(b))
+                        visuais.append((int(a), int(b)))
             log(f"      pHash: {i1}/{n} hashes comparados...")
+        log(f"      {len(visuais)} pares visualmente semelhantes "
+            f"(distancia <= {PHASH_VISUAL_THRESHOLD})")
 
-    # Monta os grupos
+    # Monta os grupos.
+    #
+    # Importante: os grupos EXATOS saem do SHA, sem o pHash. As semelhancas
+    # visuais entram depois, so entre fotos de vistoria e com ligacao completa —
+    # ver _unir_visuais. Misturar os dois no mesmo union-find foi o que, numa
+    # medicao sobre a fase 5 inteira, juntou 13.777 imagens de 5.515 escolas num
+    # unico "grupo".
+    if visuais:
+        _unir_visuais(visuais, shas, sha_map, phashes, union)
+
     clusters = defaultdict(list)
     for idx, sha in enumerate(shas):
         clusters[find(idx)].extend(sha_map[sha])
@@ -677,6 +704,92 @@ def find_duplicate_groups(records, mesmo_fornecedor=True, somente_identicas=True
     for i, g in enumerate(groups, 1):
         g["grupo_id"] = f"G{i:05d}"
     return groups
+
+
+def _unir_visuais(arestas, shas, sha_map, phashes, union):
+    """
+    Aplica as semelhancas visuais, mas so onde elas significam alguma coisa.
+
+    Duas salvaguardas, nesta ordem:
+
+    1. So foto de vistoria. Print de painel, documento, assinatura e logo sao
+       quase iguais entre si por natureza — 45% das imagens que o pHash
+       encadeava na fase 5 eram disso. Classificar custa abrir a miniatura, e
+       por isso so as imagens que aparecem em alguma aresta sao classificadas.
+
+    2. Ligacao completa. Dentro de cada componente, so vira grupo o conjunto em
+       que TODOS distam <= limite de TODOS. Sem isso, A~B e B~C arrastam A e C
+       para o mesmo grupo sem que se parecam — foi o que criou o grupo de 5.515
+       escolas.
+    """
+    import classificar_imagem
+
+    envolvidos = sorted({i for a in arestas for i in a})
+    log(f"      classificando {len(envolvidos)} imagens para a comparacao visual...")
+
+    dir_thumbs = os.path.join(BASE_DIR, "extracted_images")
+
+    def _classe(i):
+        thumb = sha_map[shas[i]][0].get("thumb_url")
+        if not thumb:
+            return i, classificar_imagem.INDEFINIDO
+        return i, classificar_imagem.classificar(os.path.join(dir_thumbs, thumb))
+
+    classes = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for i, c in pool.map(_classe, envolvidos):
+            classes[i] = c
+
+    fotos = {i for i, c in classes.items() if c == classificar_imagem.FOTO}
+    arestas = [(a, b) for a, b in arestas if a in fotos and b in fotos]
+    log(f"      {len(fotos)} sao foto de vistoria | {len(arestas)} pares mantidos")
+    if not arestas:
+        return
+
+    # Componentes por ligacao simples, so para delimitar onde refinar.
+    vizinhos = defaultdict(set)
+    for a, b in arestas:
+        vizinhos[a].add(b)
+        vizinhos[b].add(a)
+
+    vistos = set()
+    unidos = 0
+    for raiz in list(vizinhos):
+        if raiz in vistos:
+            continue
+        pilha, componente = [raiz], []
+        vistos.add(raiz)
+        while pilha:
+            atual = pilha.pop()
+            componente.append(atual)
+            for viz in vizinhos[atual]:
+                if viz not in vistos:
+                    vistos.add(viz)
+                    pilha.append(viz)
+
+        if len(componente) == 2:
+            union(componente[0], componente[1])
+            unidos += 1
+            continue
+
+        # Ligacao completa: subgrupos onde todos se parecem com todos.
+        sub = phashes[np.array(componente, dtype=np.int64)]
+        perto = _hamming_matrix_cross(sub, sub) <= PHASH_VISUAL_THRESHOLD
+        restantes = set(range(len(componente)))
+        while restantes:
+            atuais = sorted(restantes)
+            graus = perto[np.ix_(atuais, atuais)].sum(axis=1)
+            semente = atuais[int(np.argmax(graus))]
+            grupo = [semente]
+            for cand in atuais:
+                if cand != semente and all(perto[cand, g] for g in grupo):
+                    grupo.append(cand)
+            for outro in grupo[1:]:
+                union(componente[semente], componente[outro])
+                unidos += 1
+            restantes -= set(grupo)
+
+    log(f"      {unidos} ligacoes visuais aplicadas")
 
 
 def _hamming_matrix_cross(a, b):

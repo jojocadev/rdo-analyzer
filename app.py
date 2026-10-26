@@ -717,7 +717,11 @@ def scan_fase():
     amostra = int(data.get("amostra", 0))
     gravar_supabase = bool(data.get("gravar_supabase", True))
     mesmo_fornecedor = bool(data.get("mesmo_fornecedor", True))
-    somente_identicas = bool(data.get("somente_identicas", True))
+    # A comparação visual entra ligada: medida sobre a fase 5, ela acrescenta
+    # 195 achados que o SHA exato não vê (a mesma foto recomprimida ou recortada,
+    # usada em dois INEPs) sem inchar os grupos — o maior continua com 5 escolas.
+    # Ver PHASH_VISUAL_THRESHOLD e _unir_visuais em analisar_fase.py.
+    somente_identicas = bool(data.get("somente_identicas", False))
     ignorar_templates = bool(data.get("ignorar_templates", True))
 
     run_id = fase_engine.novo_run_id(fase, fornecedor)
