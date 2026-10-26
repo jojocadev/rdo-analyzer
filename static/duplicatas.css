@@ -249,6 +249,12 @@ tr:hover td.cel-de, tr:hover td.cel-meio, tr:hover td.cel-para { background: var
 .tag-grave  { background: var(--red);         color: #fff; }
 .tag-alerta { background: var(--amber);       color: #fff; }
 .tag-geo    { background: #7c5cd6;            color: #fff; }
+/* Par que so compartilha material de escritorio: cinza, nao alarma. */
+.tag-comum  { background: #eef0f4; color: #5b6472; border: 1px solid #d7dce4; }
+
+/* Miniatura que nao e foto de vistoria fica esmaecida ate o hover. */
+.thumbs img.nao-evidencia { opacity: .45; filter: grayscale(.5); }
+.thumbs img.nao-evidencia:hover { opacity: 1; filter: none; }
 
 .pdf-btn.is-divergente { border-color: var(--amber); background: var(--amber-soft); }
 
@@ -476,3 +482,12 @@ td.cel-doc { min-width: 168px; }
 .doc-x:hover { color: var(--red); }
 
 .toast.erro { background: var(--red); }
+
+/* Faixa de alerta no topo: auditoria que nao chegou ao banco. */
+.faixa-alerta {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin-bottom: 1rem; padding: .7rem .9rem;
+    background: #fff4e5; border: 1px solid #f0c48a; border-radius: 10px;
+    color: #7a4a06; font-size: .86rem;
+}
+.faixa-alerta .btn { margin-left: auto; }

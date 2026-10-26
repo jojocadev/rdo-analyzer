@@ -75,10 +75,13 @@ def health():
     sem falar com o Supabase, e derrubar o container por isso esconderia a
     causa real. O campo `supabase` diz se a variavel de ambiente chegou.
     """
+    import auditoria_db
     return jsonify({
         "ok": True,
         "supabase": bool(SERVICE_KEY),
         "ocr": _ocr_disponivel(),
+        "auditoria_no_banco": auditoria_db.disponivel(),
+        "auditoria_pendentes": len(auditoria_db.listar_pendentes()),
     })
 
 
@@ -940,7 +943,7 @@ def painel_pares(run_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade")}
+        "gravidade", "evidencia")}
 
     filtrados = pares_duplicatas.aplicar_filtros(pares, filtros)
 
@@ -1147,8 +1150,34 @@ def auditoria_criar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    # `aviso` só vem preenchido quando o banco não aceitou a gravação. A tela
+    # precisa mostrar isso: um envio que ficou só em disco não está seguro.
     return jsonify({"envio_id": envio["envio_id"], "resumo": envio["resumo"],
-                    "criado_em": envio["criado_em"]})
+                    "criado_em": envio["criado_em"],
+                    "gravado_no_banco": envio.get("gravado_no_banco", False),
+                    "aviso": envio.get("aviso", "")})
+
+
+@app.route("/api/auditoria/status", methods=["GET"])
+def auditoria_status():
+    """Estado da persistência: a tela usa para avisar quando algo não subiu."""
+    import auditoria_db
+    ok = auditoria_db.disponivel()
+    return jsonify({
+        "banco": ok,
+        "motivo": "" if ok else auditoria_db.motivo_indisponivel(),
+        "pendentes": len(auditoria_db.listar_pendentes()),
+    })
+
+
+@app.route("/api/auditoria/reenviar", methods=["POST"])
+def auditoria_reenviar():
+    """Reenvia ao banco o que ficou na fila quando ele estava fora do ar."""
+    import auditoria_db
+    enviados, restantes = auditoria_db.reenviar_pendentes()
+    return jsonify({"enviados": enviados, "restantes": restantes,
+                    "banco": auditoria_db.disponivel(),
+                    "motivo": auditoria_db.motivo_indisponivel()})
 
 
 @app.route("/api/auditoria/<envio_id>", methods=["GET"])
@@ -1161,7 +1190,7 @@ def auditoria_detalhe(envio_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade")}
+        "gravidade", "evidencia")}
     filtrados = pares_duplicatas.aplicar_filtros(pares, filtros)
 
     page = max(1, int(request.args.get("page", 1)))
@@ -1258,7 +1287,7 @@ def auditoria_csv(envio_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade")}
+        "gravidade", "evidencia")}
     return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
                          f"Auditoria_{envio_id}")
 
@@ -1321,7 +1350,7 @@ def painel_csv(run_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade")}
+        "gravidade", "evidencia")}
     return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
                          f"Duplicatas_{run_id}")
 

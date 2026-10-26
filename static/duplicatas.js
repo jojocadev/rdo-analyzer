@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await carregarExecucoes();
     if (runAtual) carregar(1);
     retomarGeo();
+    conferirPersistencia();
 });
 
 function ligarEventos() {
@@ -66,7 +67,7 @@ function ligarEventos() {
 
     // Os seletores aplicam na hora — são escolhas discretas, não digitação
     ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fFp',
-     'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade'].forEach((id) =>
+     'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade', 'fEvidencia'].forEach((id) =>
         $(id).addEventListener('change', () => carregar(1)));
 
     // A pagina de auditoria nao tem coluna de selecao nem botao de envio.
@@ -150,6 +151,7 @@ function filtrosAtuais() {
         somente_fotos: $('fFotos').value,
         mesmo_municipio: $('fMesmoMunicipio').value,
         gravidade: $('fGravidade').value,
+        evidencia: $('fEvidencia') ? $('fEvidencia').value : '',
     };
 }
 
@@ -160,6 +162,8 @@ function queryString(extra) {
 
 function limparFiltros() {
     ['fBusca', 'fTexto'].forEach((id) => ($(id).value = ''));
+    // volta ao padrao: material de escritorio repetido nao e achado
+    if ($('fEvidencia')) $('fEvidencia').value = 'com_foto';
     ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fMesmoMunicipio',
      'fGravidade'].forEach((id) => ($(id).value = ''));
     $('fModoTexto').value = 'nao_contem';
@@ -478,6 +482,23 @@ function celPdfs(pdfs, inep) {
     }).join('') + `</div>`;
 }
 
+/** Nome legível do que o par compartilha, quando não há foto de vistoria. */
+const NOME_CLASSE = {
+    print_tela: 'print de tela',
+    documento: 'documento / planilha',
+    assinatura: 'assinatura',
+    em_branco: 'área em branco',
+    logo: 'logo',
+    indefinido: 'imagem não identificada',
+};
+
+function rotuloClasses(classes) {
+    const nomes = (classes || []).map((c) => NOME_CLASSE[c] || c);
+    if (!nomes.length) return 'material comum';
+    if (nomes.length === 1) return nomes[0];
+    return `${nomes.slice(0, -1).join(', ')} e ${nomes[nomes.length - 1]}`;
+}
+
 function celEvidencias(p) {
     return `
         <div class="img-count">${num(p.qtd_imagens)} image${p.qtd_imagens > 1 ? 'ns' : 'm'} igua${p.qtd_imagens > 1 ? 'is' : 'l'}</div>
@@ -486,8 +507,13 @@ function celEvidencias(p) {
                 ? '<span class="tag tag-exata">100% exatas</span>'
                 : `<span class="tag tag-exata">${num(p.qtd_exatas)} exatas</span>
                    <span class="tag tag-visual">${num(p.qtd_imagens - p.qtd_exatas)} visuais</span>`}
-            ${p.qtd_fotos_camera
-                ? `<span class="tag tag-foto"><i class="fa-solid fa-camera"></i> ${num(p.qtd_fotos_camera)} foto${p.qtd_fotos_camera > 1 ? 's' : ''}</span>`
+            ${p.qtd_evidencias
+                ? `<span class="tag tag-foto"><i class="fa-solid fa-camera"></i> ${num(p.qtd_evidencias)} foto${p.qtd_evidencias > 1 ? 's' : ''} de vistoria</span>`
+                : ''}
+        </div>
+        <div class="img-tags">
+            ${p.so_material_comum
+                ? `<span class="tag tag-comum" title="As escolas só compartilham ${rotuloClasses(p.classes)} — material que o fornecedor anexa igual em toda escola. Não é reaproveitamento de foto."><i class="fa-solid fa-paperclip"></i> só ${rotuloClasses(p.classes)}</span>`
                 : ''}
         </div>
         <div class="img-tags">
@@ -515,8 +541,9 @@ function celThumbs(p) {
 
     return `<div class="thumbs">` + mostra.map((im, i) => `
         <img src="/extracted_images/${encodeURIComponent(im.thumb_a)}" loading="lazy"
+             class="${im.evidencia === false ? 'nao-evidencia' : ''}"
              alt="Imagem duplicada ${i + 1}"
-             title="${im.tipo} · ${im.largura}×${im.altura} · pág. ${im.pagina_a} / ${im.pagina_b}"
+             title="${im.classe_rotulo || im.tipo} · ${im.tipo} · ${im.largura}×${im.altura} · pág. ${im.pagina_a} / ${im.pagina_b}"
              onclick="abrirLightbox('${p.par_id}', ${i})">`).join('') +
         (resto > 0
             ? `<div class="mais" onclick="abrirLightbox('${p.par_id}', ${MAX_THUMBS})">+${resto}</div>`
@@ -671,8 +698,14 @@ async function confirmarEnvio() {
         limparSelecao();
         fecharModalEnvio();
         // Sem redirecionar: quem esta triando continua de onde parou.
-        avisar(`Enviado para auditoria: ${num(d.resumo.pares)} pares, ` +
-               `${num(d.resumo.escolas)} escolas.`);
+        if (d.gravado_no_banco) {
+            avisar(`Enviado para auditoria: ${num(d.resumo.pares)} pares, ` +
+                   `${num(d.resumo.escolas)} escolas.`);
+        } else {
+            // Ficou so em disco. Avisar e obrigatorio: em disco o registro nao
+            // sobrevive a um redeploy do container.
+            avisarErro(d.aviso || 'Enviado, mas não chegou ao banco de dados.');
+        }
     } catch (e) {
         erro.textContent = 'Não foi possível enviar: ' + e.message;
         erro.hidden = false;
@@ -716,7 +749,11 @@ async function enviarDocumento(input, inep, parId) {
 
         await carregarDocumentos();
         await carregar(paginaAtual);
-        avisar(`Documento anexado ao INEP ${inep}.`);
+        if (d.gravado_no_banco === false) {
+            avisarErro(d.aviso || `Documento salvo só localmente, não chegou ao banco.`);
+        } else {
+            avisar(`Documento anexado ao INEP ${inep}.`);
+        }
     } catch (e) {
         rotulo.innerHTML = original;
         input.value = '';
@@ -802,6 +839,50 @@ function acompanharGeo() {
     };
     tick();
     geoTimer = setInterval(tick, 3000);
+}
+
+/* ---------- Estado da persistência da auditoria ---------- */
+
+/**
+ * Mostra uma faixa no topo quando o banco não está acessível ou quando há
+ * registro na fila de reenvio. Sem isto, quem usa o sistema não teria como
+ * saber que o que mandou para auditoria ficou só no disco do container.
+ */
+async function conferirPersistencia() {
+    let d;
+    try { d = await (await fetch('/api/auditoria/status')).json(); } catch (e) { return; }
+    if (d.banco && !d.pendentes) {
+        const velha = $('faixaBanco');
+        if (velha) velha.remove();
+        return;
+    }
+
+    let el = $('faixaBanco');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'faixaBanco';
+        el.className = 'faixa-alerta';
+        document.querySelector('.wrap').prepend(el);
+    }
+
+    const partes = [];
+    if (!d.banco) partes.push(`<strong>Auditoria não está sendo salva no banco.</strong> ${d.motivo || ''}`);
+    if (d.pendentes) partes.push(`${d.pendentes} registro(s) aguardando reenvio.`);
+    el.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${partes.join(' ')}`
+        + (d.pendentes ? ` <button class="btn btn-sm" id="btnReenviar">Reenviar agora</button>` : '');
+
+    const btn = $('btnReenviar');
+    if (btn) btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Reenviando…';
+        try {
+            const r = await (await fetch('/api/auditoria/reenviar', { method: 'POST' })).json();
+            avisar(`${r.enviados} registro(s) enviados, ${r.restantes} restantes.`);
+        } catch (e) {
+            avisarErro('Falha ao reenviar.');
+        }
+        conferirPersistencia();
+    });
 }
 
 /** Se o servidor já estava conferindo, a página reassume o acompanhamento. */

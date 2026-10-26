@@ -14,10 +14,15 @@ import os
 import re
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 
 import analisar_fase as motor
+import classificar_imagem
 import geolocalizacao
+
+DIR_MINIATURAS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "extracted_images")
 
 # "12009679 - AC - BUJARI - ESC MARIA DO CARMO RAMOS - TIPP GESAC.pdf"
 _RE_UF = re.compile(r"^[A-Z]{2}$")
@@ -124,6 +129,54 @@ def _lado(membro):
     }
 
 
+def _caminho_classes(run_id):
+    return os.path.join(motor.caminho_run(run_id), "classes_imagens.json")
+
+
+def classes_da_execucao(run_id, imagens, coordenadas):
+    """
+    Classe de cada imagem compartilhada (foto de vistoria, print, assinatura…).
+
+    Fica em cache num JSON ao lado da execução: classificar as ~300 imagens de
+    uma execução leva segundos, e a tela refaz os pares a cada mudança de filtro.
+    Imagens novas são classificadas e acrescentadas sem refazer o resto.
+    """
+    caminho = _caminho_classes(run_id)
+    cache = {}
+    if os.path.exists(caminho):
+        try:
+            with io.open(caminho, encoding="utf-8") as fh:
+                cache = json.load(fh)
+        except Exception:
+            cache = {}
+
+    faltando = [(sha, thumb) for sha, thumb in imagens.items() if sha not in cache]
+
+    def _classificar(item):
+        sha, thumb = item
+        if not thumb:
+            return sha, classificar_imagem.INDEFINIDO
+        return sha, classificar_imagem.classificar(
+            os.path.join(DIR_MINIATURAS, thumb),
+            tem_coordenada=bool(coordenadas.get(sha)))
+
+    # O custo é quase todo decodificação de JPEG, que solta o GIL: as threads
+    # valem a pena. Uma execução grande classifica uma vez só, no primeiro acesso.
+    if faltando:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for sha, classe in pool.map(_classificar, faltando):
+                cache[sha] = classe
+
+    if faltando:
+        try:
+            os.makedirs(os.path.dirname(caminho), exist_ok=True)
+            with io.open(caminho, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh)
+        except Exception:
+            pass        # sem cache a tela só fica mais lenta; não é motivo de erro
+    return cache
+
+
 def montar_pares(run_id):
     """
     Reagrupa os grupos da execução em pares `INEP A × INEP B`.
@@ -204,9 +257,24 @@ def montar_pares(run_id):
 
     marcas = ler_marcas(run_id)
 
+    # O que cada imagem compartilhada E. Sem isto, assinatura digitalizada, logo
+    # da operadora e print de planilha entram como "duplicata" — eles circulam
+    # dentro de um mesmo fornecedor por procedimento, e o filtro por fornecedor
+    # nao os pega. Ver classificar_imagem.py.
+    distintas = {}
+    for par in pares.values():
+        for img in par["imagens"]:
+            distintas.setdefault(img["sha256"], img.get("thumb_a"))
+    coordenadas = geolocalizacao.ler_cache(meta.get("fase", "5"))
+    classes = classes_da_execucao(run_id, distintas, coordenadas)
+
     lista = []
     for par in pares.values():
         imagens = par["imagens"]
+        for img in imagens:
+            img["classe"] = classes.get(img["sha256"], classificar_imagem.INDEFINIDO)
+            img["classe_rotulo"] = classificar_imagem.rotulo(img["classe"])
+            img["evidencia"] = classificar_imagem.e_evidencia(img["classe"])
         for lado in ("pdfs_a", "pdfs_b"):
             par[lado] = [{**p, "paginas": sorted(x for x in p["paginas"] if x)}
                          for p in par[lado].values()]
@@ -216,6 +284,12 @@ def montar_pares(run_id):
         par["qtd_imagens"] = len(imagens)
         par["qtd_exatas"] = sum(1 for i in imagens if i["exata"])
         par["qtd_fotos_camera"] = sum(1 for i in imagens if i["foto_camera"])
+        # A contagem que importa: quantas das imagens repetidas sao mesmo foto
+        # de vistoria. Zero aqui significa que as escolas so compartilham
+        # material de escritorio, e o par nao e achado.
+        par["qtd_evidencias"] = sum(1 for i in imagens if i["evidencia"])
+        par["so_material_comum"] = par["qtd_evidencias"] == 0
+        par["classes"] = sorted({i["classe"] for i in imagens})
         par["todas_exatas"] = par["qtd_exatas"] == len(imagens)
         par["mesmo_municipio"] = bool(par["escola_a"]["municipio"]) and \
             par["escola_a"]["municipio"] == par["escola_b"]["municipio"]
@@ -240,8 +314,9 @@ def montar_pares(run_id):
 
         lista.append(par)
 
-    # Mais imagens compartilhadas primeiro: é o caso mais forte.
-    lista.sort(key=lambda p: (p["qtd_fotos_camera"], p["qtd_imagens"]), reverse=True)
+    # Mais foto de vistoria repetida primeiro: é o caso mais forte. Par que só
+    # compartilha material de escritório desce para o fim.
+    lista.sort(key=lambda p: (p["qtd_evidencias"], p["qtd_imagens"]), reverse=True)
     return meta, lista
 
 
@@ -328,6 +403,15 @@ def aplicar_filtros(pares, f):
     elif mm == "nao":
         out = [p for p in out if not p["mesmo_municipio"]]
 
+    # Tipo de evidencia. O padrao da tela e "com_foto": par que so compartilha
+    # assinatura, logo ou print nao e achado, e eram 38 dos 101 da fase 5.
+    # Nada e descartado — "tudo" traz os dois, "sem_foto" isola os excluidos.
+    evidencia = (f.get("evidencia") or "").strip()
+    if evidencia == "com_foto":
+        out = [p for p in out if p.get("qtd_evidencias", 0) > 0]
+    elif evidencia == "sem_foto":
+        out = [p for p in out if not p.get("qtd_evidencias", 0)]
+
     gravidade = (f.get("gravidade") or "").strip()
     if gravidade == "fora_do_raio":
         out = [p for p in out if p.get("fora_do_raio")]
@@ -345,6 +429,7 @@ def resumo(pares):
     por_fornecedor = defaultdict(int)
     por_uf = defaultdict(int)
     imagens = fotos = exatas = fp = mesmo_pdf = pdf_div = fora_raio = 0
+    evidencias = so_material = 0
 
     for p in pares:
         escolas.add(p["escola_a"]["inep"])
@@ -352,6 +437,9 @@ def resumo(pares):
         imagens += p["qtd_imagens"]
         fotos += p["qtd_fotos_camera"]
         exatas += p["qtd_exatas"]
+        evidencias += p.get("qtd_evidencias", 0)
+        if p.get("so_material_comum"):
+            so_material += 1
         if p["falso_positivo"]:
             fp += 1
         if p.get("mesmo_pdf"):
@@ -375,6 +463,8 @@ def resumo(pares):
         "imagens": imagens,
         "fotos_camera": fotos,
         "exatas": exatas,
+        "evidencias": evidencias,
+        "so_material_comum": so_material,
         "falsos_positivos": fp,
         "pendentes": len(pares) - fp,
         "mesmo_municipio": sum(1 for p in pares if p["mesmo_municipio"]),

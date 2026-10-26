@@ -1,13 +1,20 @@
 """
 Envios para auditoria: lotes de pares encaminhados a partir do Painel de Duplicatas.
 
-Cada envio congela QUAIS pares foram encaminhados (por par_id) e de qual execução
-vieram. Os dados do par continuam vindo do histórico da execução — o envio guarda
-a seleção, não uma cópia das evidências, para que a auditoria veja sempre as
-mesmas imagens e PDFs que o painel mostra.
+Cada envio guarda uma CÓPIA INTEGRAL dos pares encaminhados, não apenas os
+par_ids. A versão anterior guardava só a seleção e relia as evidências de
+`historico/<run_id>/grupos.json`; como essa pasta não vai para o git, a VPS
+subiu sem ela e a auditoria abria vazia. Além disso, refazer a varredura mudava
+o que um envio antigo mostrava — o registro de fiscalização não pode se mexer
+depois de feito.
 
-Estrutura em disco:
-    auditoria/<envio_id>.json
+Onde fica:
+    Supabase  — fonte da verdade (auditoria_envios, auditoria_envio_pares,
+                auditoria_documentos, auditoria_eventos + bucket auditoria-docs)
+    disco     — cache de leitura e rede de segurança quando o banco está fora
+
+Quando o banco falha, a operação não é dada como concluída em silêncio: o
+chamador recebe um aviso e o registro entra na fila de reenvio.
 """
 
 import io
@@ -17,6 +24,7 @@ import time
 import urllib.parse
 
 import analisar_fase as motor
+import auditoria_db
 import pares_duplicatas
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +72,9 @@ def criar_envio(run_id, par_ids, observacao="", autor=""):
         "observacao": observacao or "",
         "status": "enviado",
         "par_ids": [p["par_id"] for p in escolhidos],
+        # Cópia integral: o envio não pode depender do histórico em disco nem
+        # mudar se a execução for refeita.
+        "pares": escolhidos,
         "resumo": {
             "pares": len(escolhidos),
             "escolas": len(ineps),
@@ -81,11 +92,21 @@ def criar_envio(run_id, par_ids, observacao="", autor=""):
     os.makedirs(DIR_AUDITORIA, exist_ok=True)
     with io.open(_caminho(envio["envio_id"]), "w", encoding="utf-8") as fh:
         json.dump(envio, fh, ensure_ascii=False, indent=2)
+
+    # O banco é a fonte da verdade; se ele falhar, o envio fica em disco e na
+    # fila de reenvio, e o aviso sobe para a tela em vez de sumir.
+    envio["aviso"] = ""
+    try:
+        auditoria_db.salvar_envio(envio, escolhidos)
+        envio["gravado_no_banco"] = True
+    except auditoria_db.BancoIndisponivel as e:
+        envio["gravado_no_banco"] = False
+        envio["aviso"] = (f"Salvo localmente, mas não foi para o banco: {e}. "
+                          "Está na fila de reenvio.")
     return envio
 
 
-def listar_envios():
-    """Envios do mais recente para o mais antigo (sem os pares, só o resumo)."""
+def _envios_do_disco():
     if not os.path.isdir(DIR_AUDITORIA):
         return []
     envios = []
@@ -100,41 +121,96 @@ def listar_envios():
         # A pasta tambem guarda outros JSON (metadados de documentos, por ex.):
         # so entra o que tem a cara de um envio.
         if isinstance(dado, dict) and dado.get("envio_id"):
+            dado.pop("pares", None)          # a lista não precisa das evidências
             envios.append(dado)
-    envios.sort(key=lambda e: e.get("criado_em", ""), reverse=True)
+    return envios
+
+
+def listar_envios():
+    """
+    Envios do mais recente para o mais antigo (sem os pares, só o resumo).
+
+    Banco primeiro; o disco entra como complemento para o que ainda não subiu,
+    de modo que um envio feito offline continue aparecendo.
+    """
+    por_id = {}
+    if auditoria_db.disponivel():
+        try:
+            for e in auditoria_db.listar_envios():
+                por_id[e["envio_id"]] = e
+        except auditoria_db.BancoIndisponivel:
+            pass
+
+    for e in _envios_do_disco():
+        por_id.setdefault(e["envio_id"], e)
+
+    envios = list(por_id.values())
+    envios.sort(key=lambda e: str(e.get("criado_em") or ""), reverse=True)
     return envios
 
 
 def carregar_envio(envio_id):
     caminho = _caminho(envio_id)
-    if not os.path.exists(caminho):
-        return None
-    with io.open(caminho, encoding="utf-8") as fh:
-        return json.load(fh)
+    if os.path.exists(caminho):
+        with io.open(caminho, encoding="utf-8") as fh:
+            return json.load(fh)
+    # Sem o arquivo local (VPS recém-criada, disco limpo): o banco tem tudo.
+    if auditoria_db.disponivel():
+        try:
+            return auditoria_db.carregar_envio(envio_id)
+        except auditoria_db.BancoIndisponivel:
+            pass
+    return None
 
 
 def excluir_envio(envio_id):
+    """
+    Remove o envio. A trilha de eventos permanece: o registro de que o lote
+    existiu e foi removido e justamente o que nao pode se perder.
+    """
+    removido = False
     caminho = _caminho(envio_id)
     if os.path.exists(caminho):
         os.remove(caminho)
-        return True
-    return False
+        removido = True
+
+    if auditoria_db.disponivel():
+        try:
+            auditoria_db.excluir_envio(envio_id)
+            removido = True
+        except auditoria_db.BancoIndisponivel:
+            pass
+    return removido
 
 
 def pares_do_envio(envio_id):
     """
     Devolve (envio, pares) com os dados completos, prontos para a tela.
 
-    Os pares vem do historico da execucao de origem e sao filtrados pelos par_ids
-    congelados no envio, na mesma ordem em que foram encaminhados.
+    Ordem de busca, da fonte mais confiavel para a menos:
+      1. snapshot no banco — imutavel, independe de arquivo local;
+      2. copia gravada junto do envio em disco;
+      3. remontagem a partir do historico da execucao (envios antigos, feitos
+         antes de passarmos a guardar a copia).
     """
     envio = carregar_envio(envio_id)
     if envio is None:
         return None, []
 
-    _meta, todos = pares_duplicatas.montar_pares(envio["run_id"])
+    if auditoria_db.disponivel():
+        try:
+            pares = auditoria_db.pares_do_envio(envio_id)
+            if pares:
+                return envio, pares
+        except auditoria_db.BancoIndisponivel:
+            pass
+
+    if envio.get("pares"):
+        return envio, envio["pares"]
+
+    _meta, todos = pares_duplicatas.montar_pares(envio.get("run_id", ""))
     por_id = {p["par_id"]: p for p in todos}
-    pares = [por_id[pid] for pid in envio["par_ids"] if pid in por_id]
+    pares = [por_id[pid] for pid in envio.get("par_ids", []) if pid in por_id]
     return envio, pares
 
 
@@ -224,34 +300,80 @@ def salvar_documento(envio_id, inep, nome_arquivo, conteudo,
     docs = _ler_meta(envio_id)
     docs.append(doc)
     _gravar_meta(envio_id, docs)
+
+    # Arquivo no Storage e metadado no banco. Falhou, vai para a fila e o aviso
+    # sobe para a tela — documento de resolucao nao pode sumir calado.
+    doc["aviso"] = ""
+    try:
+        auditoria_db.salvar_documento(doc, conteudo)
+        doc["gravado_no_banco"] = True
+    except auditoria_db.BancoIndisponivel as e:
+        doc["gravado_no_banco"] = False
+        doc["aviso"] = (f"Salvo localmente, mas não foi para o banco: {e}. "
+                        "Está na fila de reenvio.")
     return doc
 
 
 def listar_documentos(envio_id):
-    """Documentos do envio, do mais recente para o mais antigo."""
-    return sorted(_ler_meta(envio_id),
-                  key=lambda d: d.get("criado_em", ""), reverse=True)
+    """
+    Documentos do envio, do mais recente para o mais antigo.
+
+    Banco primeiro; o disco completa com o que ainda nao subiu.
+    """
+    por_id = {}
+    if auditoria_db.disponivel():
+        try:
+            for d in auditoria_db.listar_documentos(envio_id):
+                por_id[d["doc_id"]] = d
+        except auditoria_db.BancoIndisponivel:
+            pass
+
+    for d in _ler_meta(envio_id):
+        por_id.setdefault(d.get("doc_id"), d)
+
+    return sorted(por_id.values(),
+                  key=lambda d: str(d.get("criado_em") or ""), reverse=True)
 
 
 def caminho_documento(arquivo_path):
-    """Caminho absoluto de um documento, barrando saida da pasta de documentos."""
+    """
+    Caminho absoluto de um documento, barrando saida da pasta de documentos.
+
+    Se o arquivo nao esta no disco (container novo), baixa do Storage para o
+    mesmo lugar e segue — assim o download funciona mesmo apos um redeploy.
+    """
     destino = os.path.normpath(os.path.join(DIR_DOCS, arquivo_path))
     if not destino.startswith(os.path.normpath(DIR_DOCS) + os.sep):
         raise ValueError("Caminho inválido.")
-    return destino if os.path.exists(destino) else None
+    if os.path.exists(destino):
+        return destino
+
+    conteudo = auditoria_db.baixar_arquivo(arquivo_path) if auditoria_db.disponivel() else None
+    if conteudo:
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "wb") as fh:
+            fh.write(conteudo)
+        return destino
+    return None
 
 
 def excluir_documento(envio_id, doc_id):
-    """Remove o documento do disco e do registro."""
+    """Remove o documento do disco e do registro. O evento fica na trilha."""
     docs = _ler_meta(envio_id)
     alvo = next((d for d in docs if d.get("doc_id") == doc_id), None)
-    if alvo is None:
-        return False
-    caminho = caminho_documento(alvo["arquivo_path"])
-    if caminho:
+    if alvo is not None:
+        caminho = caminho_documento(alvo["arquivo_path"])
+        if caminho:
+            try:
+                os.remove(caminho)
+            except Exception:
+                pass
+        _gravar_meta(envio_id, [d for d in docs if d.get("doc_id") != doc_id])
+
+    if auditoria_db.disponivel():
         try:
-            os.remove(caminho)
-        except Exception:
+            auditoria_db.excluir_documento(envio_id, doc_id)
+            return True
+        except auditoria_db.BancoIndisponivel:
             pass
-    _gravar_meta(envio_id, [d for d in docs if d.get("doc_id") != doc_id])
-    return True
+    return alvo is not None
