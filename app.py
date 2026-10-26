@@ -973,14 +973,23 @@ def painel_marcar_falso_positivo(run_id):
     if not par_id:
         return jsonify({"error": "par_id é obrigatório."}), 400
 
+    marcado = bool(data.get("falso_positivo"))
     try:
-        marcas = pares_duplicatas.marcar(run_id, par_id, bool(data.get("falso_positivo")))
+        marcas = pares_duplicatas.marcar(run_id, par_id, marcado)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    # A marcação em si fica no arquivo da execução (é o que a tela lê a cada
+    # filtro), mas ela é um ajuste sobre a análise: o registro de que alguém
+    # julgou este par vai para a trilha, que não se perde com o disco.
+    import auditoria_db
+    auditoria_db.registrar_evento(
+        "falso_positivo_marcado" if marcado else "falso_positivo_desmarcado",
+        par_id=par_id, detalhe={"run_id": run_id})
+
     _obter_pares(run_id, invalidar=True)
     return jsonify({"par_id": par_id,
-                    "falso_positivo": bool(data.get("falso_positivo")),
+                    "falso_positivo": marcado,
                     "total_marcados": len(marcas)})
 
 
@@ -1318,9 +1327,11 @@ def _csv_de_pares(filtrados, nome_arquivo):
 
     buf = _io.StringIO()
     w = csv.writer(buf, delimiter=";")
+    import classificar_imagem
     w.writerow(["INEP A", "Escola A", "UF A", "Municipio A",
                 "INEP B", "Escola B", "UF B", "Municipio B",
-                "Fornecedor", "Imagens", "Exatas", "Fotos de camera",
+                "Fornecedor", "Imagens", "Exatas", "Fotos de vistoria",
+                "Tipo de evidencia", "Fotos fora do raio", "Distancia max (m)",
                 "Mesmo municipio", "Mesmo PDF nos dois", "PDF de outra escola",
                 "Falso positivo", "Grupos", "PDF A", "PDF B"])
     for p in filtrados:
@@ -1329,7 +1340,11 @@ def _csv_de_pares(filtrados, nome_arquivo):
             a["inep"], a["escola"], a["uf"], a["municipio"],
             b["inep"], b["escola"], b["uf"], b["municipio"],
             " / ".join(p["fornecedores"]), p["qtd_imagens"], p["qtd_exatas"],
-            p["qtd_fotos_camera"], "sim" if p["mesmo_municipio"] else "nao",
+            p.get("qtd_evidencias", 0),
+            " / ".join(classificar_imagem.rotulo(c) for c in p.get("classes", [])),
+            p.get("fora_do_raio", 0),
+            round(p.get("distancia_max_m") or 0),
+            "sim" if p["mesmo_municipio"] else "nao",
             "sim" if p.get("mesmo_pdf") else "nao",
             "sim" if p.get("pdf_divergente") else "nao",
             "sim" if p["falso_positivo"] else "nao", " ".join(p["grupos"]),
