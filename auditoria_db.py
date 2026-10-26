@@ -95,12 +95,21 @@ _VALIDADE_CHECAGEM = 30  # segundos
 
 
 def _tabelas_existem():
-    try:
-        for tabela in TABELAS:
-            _chamar(f"{SUPABASE_URL}/{tabela}?select=1&limit=1", timeout=20)
-        return True
-    except BancoIndisponivel:
-        return False
+    """
+    True quando as quatro tabelas estao no schema.
+
+    Testa com `limit=0`, que nao traz linha nenhuma, e so trata PGRST205 (tabela
+    ausente) como "nao existe". Qualquer outro erro e problema de rede ou de
+    permissao, e cair para o Storage nesse caso mascararia a causa real.
+    """
+    for tabela in TABELAS:
+        try:
+            _chamar(f"{SUPABASE_URL}/{tabela}?select=*&limit=0", timeout=20)
+        except BancoIndisponivel as e:
+            if "PGRST205" in str(e) or "HTTP 404" in str(e):
+                return False
+            raise
+    return True
 
 
 def disponivel(forcar=False):
@@ -118,9 +127,15 @@ def disponivel(forcar=False):
                        motivo="SUPABASE_SERVICE_KEY não está definida.")
         return False
 
-    if _tabelas_existem():
-        _estado.update(ok=True, backend=TABELAS_BACKEND, motivo="")
-        return True
+    try:
+        if _tabelas_existem():
+            _estado.update(ok=True, backend=TABELAS_BACKEND, motivo="")
+            return True
+    except BancoIndisponivel as e:
+        # Tabelas existem mas o Supabase recusou. Nao mascarar com o Storage:
+        # a causa precisa aparecer na tela.
+        _estado.update(ok=False, backend="", motivo=str(e))
+        return False
 
     # Sem as tabelas, o Storage sustenta tudo sozinho — e a service_role cria o
     # bucket sem precisar de DDL.
