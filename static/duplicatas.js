@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (runAtual) carregar(1);
     retomarGeo();
     conferirPersistencia();
+    carregarMotivos();
 });
 
 function ligarEventos() {
@@ -55,6 +56,18 @@ function ligarEventos() {
             : `/api/historico/${encodeURIComponent(runAtual)}/zip`;
     });
     if ($('btnGeo')) $('btnGeo').addEventListener('click', conferirCoordenadas);
+
+    if ($('mtCancelar')) {
+        $('mtCancelar').addEventListener('click', () => fecharModalMotivo(null));
+        $('mtConfirmar').addEventListener('click', () => fecharModalMotivo({
+            motivo_codigo: $('mtCodigo').value,
+            motivo: $('mtTexto').value.trim(),
+        }));
+        // Clicar fora ou apertar Esc equivale a cancelar.
+        $('modalMotivo').addEventListener('click', (e) => {
+            if (e.target === $('modalMotivo')) fecharModalMotivo(null);
+        });
+    }
     $('runSelect').addEventListener('change', (e) => {
         runAtual = e.target.value;
         carregar(1);
@@ -67,7 +80,8 @@ function ligarEventos() {
 
     // Os seletores aplicam na hora — são escolhas discretas, não digitação
     ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fFp',
-     'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade', 'fEvidencia'].forEach((id) =>
+     'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade', 'fEvidencia',
+     'fEncaminhado', 'fMaeFilho'].forEach((id) =>
         $(id).addEventListener('change', () => carregar(1)));
 
     // A pagina de auditoria nao tem coluna de selecao nem botao de envio.
@@ -152,6 +166,8 @@ function filtrosAtuais() {
         mesmo_municipio: $('fMesmoMunicipio').value,
         gravidade: $('fGravidade').value,
         evidencia: $('fEvidencia') ? $('fEvidencia').value : '',
+        encaminhado: $('fEncaminhado') ? $('fEncaminhado').value : '',
+        mae_filho: $('fMaeFilho') ? $('fMaeFilho').value : '',
     };
 }
 
@@ -164,6 +180,7 @@ function limparFiltros() {
     ['fBusca', 'fTexto'].forEach((id) => ($(id).value = ''));
     // volta ao padrao: material de escritorio repetido nao e achado
     if ($('fEvidencia')) $('fEvidencia').value = 'com_foto';
+    ['fEncaminhado', 'fMaeFilho'].forEach((id) => { if ($(id)) $(id).value = ''; });
     ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fMesmoMunicipio',
      'fGravidade'].forEach((id) => ($(id).value = ''));
     $('fModoTexto').value = 'nao_contem';
@@ -179,7 +196,7 @@ async function carregar(pagina) {
     if (!runAtual) return;
     paginaAtual = pagina || 1;
 
-    $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 8}" class="empty">
+    $('tbody').innerHTML = `<tr><td colspan="${EH_AUDITORIA ? 6 : 9}" class="empty">
         <i class="fa-solid fa-spinner spinner"></i> Carregando…</td></tr>`;
 
     try {
@@ -309,7 +326,7 @@ function renderTabela(d) {
     });
 
     $('tbody').innerHTML = pares.map((p) => `
-        <tr class="${p.falso_positivo ? 'is-fp' : ''}${selecionados.has(p.par_id) ? ' is-sel' : ''}"
+        <tr class="${p.falso_positivo ? 'is-fp' : ''}${selecionados.has(p.par_id) ? ' is-sel' : ''}${p.ja_encaminhado ? ' is-enc' : ''}"
             data-par="${p.par_id}">
             ${EH_AUDITORIA ? '' : `<td class="cel-sel">${celSelecao(p)}</td>`}
             <td class="cel-de">${celEscola(p.escola_a, p)}</td>
@@ -319,11 +336,16 @@ function renderTabela(d) {
             <td class="cel-para">${celEscola(p.escola_b, p)}</td>
             <td class="cel-para">${celPdfs(p.pdfs_b, p.escola_b.inep)}</td>
             ${EH_AUDITORIA ? `<td class="cel-doc">${celDocumentos(p)}</td>`
-                            : `<td>${celToggle(p)}</td>`}
+                            : `<td>${celToggle(p)}</td>
+                               <td>${celMaeFilho(p)}</td>`}
         </tr>`).join('');
 
-    $('tbody').querySelectorAll('.tg input').forEach((el) =>
+    $('tbody').querySelectorAll('.tg-fp').forEach((el) =>
         el.addEventListener('change', (e) => marcarFalsoPositivo(
+            e.target.dataset.par, e.target.checked, e.target)));
+
+    $('tbody').querySelectorAll('.tg-maefilho').forEach((el) =>
+        el.addEventListener('change', (e) => marcarMaeFilho(
             e.target.dataset.par, e.target.checked, e.target)));
 
     $('tbody').querySelectorAll('.chk-envio').forEach((el) =>
@@ -515,6 +537,9 @@ function celEvidencias(p) {
             ${p.so_material_comum
                 ? `<span class="tag tag-comum" title="As escolas só compartilham ${rotuloClasses(p.classes)} — material que o fornecedor anexa igual em toda escola. Não é reaproveitamento de foto."><i class="fa-solid fa-paperclip"></i> só ${rotuloClasses(p.classes)}</span>`
                 : ''}
+            ${p.ja_encaminhado
+                ? '<span class="tag tag-enc" title="Uma destas escolas já foi encaminhada para auditoria"><i class="fa-solid fa-clipboard-check"></i> já em auditoria</span>'
+                : ''}
         </div>
         <div class="img-tags">
             ${p.fora_do_raio
@@ -586,12 +611,47 @@ function celDocumentos(p) {
 }
 
 function celToggle(p) {
+    // O motivo registrado vira o title: quem revisar depois lê sem abrir nada.
+    const motivo = [p.motivo_codigo ? rotuloMotivo(p.motivo_codigo) : '', p.motivo]
+        .filter(Boolean).join(' — ');
     return `
-        <label class="tg" title="Marcar este par como falso positivo">
-            <input type="checkbox" data-par="${p.par_id}" ${p.falso_positivo ? 'checked' : ''}>
+        <label class="tg" title="${motivo || 'Marcar este par como falso positivo'}">
+            <input type="checkbox" class="tg-fp" data-par="${p.par_id}" ${p.falso_positivo ? 'checked' : ''}>
             <span class="slider"></span>
             <span class="txt">${p.falso_positivo ? 'Sim' : 'Não'}</span>
+        </label>
+        ${motivo ? `<div class="motivo-nota" title="${motivo}">${motivo}</div>` : ''}`;
+}
+
+/**
+ * Mãe/filho é estado separado do falso positivo de propósito: aqui a duplicata
+ * existe e está correta — as duas escolas dividem a mesma estrutura — enquanto
+ * falso positivo diz que o sistema errou.
+ */
+function celMaeFilho(p) {
+    return `
+        <label class="tg tg-mf" title="As duas escolas dividem a mesma estrutura física">
+            <input type="checkbox" class="tg-maefilho" data-par="${p.par_id}" ${p.mae_filho ? 'checked' : ''}>
+            <span class="slider"></span>
+            <span class="txt">${p.mae_filho ? 'Sim' : 'Não'}</span>
         </label>`;
+}
+
+let MOTIVOS = [];
+
+function rotuloMotivo(codigo) {
+    const m = MOTIVOS.find((x) => x.codigo === codigo);
+    return m ? m.rotulo : codigo;
+}
+
+async function carregarMotivos() {
+    try {
+        const d = await (await fetch('/api/painel/motivos')).json();
+        MOTIVOS = d.motivos || [];
+        const sel = $('mtCodigo');
+        if (sel) sel.innerHTML = MOTIVOS.map(
+            (m) => `<option value="${m.codigo}">${m.rotulo}</option>`).join('');
+    } catch (e) { /* a tela segue utilizável; o motivo vira texto livre */ }
 }
 
 function renderPager(d) {
@@ -613,13 +673,29 @@ async function marcarFalsoPositivo(parId, valor, input) {
     const txt = input.parentElement.querySelector('.txt');
     input.disabled = true;
 
+    // Ao MARCAR, pergunta o motivo antes de gravar. Ao desmarcar, não: quem
+    // está desfazendo não deve um motivo.
+    let extra = {};
+    if (valor) {
+        input.disabled = false;
+        const resposta = await pedirMotivo(parId);
+        if (resposta === null) {            // cancelou
+            input.checked = false;
+            return;
+        }
+        extra = resposta;
+        input.disabled = true;
+    }
+
     try {
         const r = await fetch(`/api/painel/${encodeURIComponent(runAtual)}/falso-positivo`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ par_id: parId, falso_positivo: valor }),
+            body: JSON.stringify({ par_id: parId, falso_positivo: valor, ...extra }),
         });
-        if (!r.ok) throw new Error((await r.json()).error || 'falha ao salvar');
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha ao salvar');
+        if (d.gravado_no_banco === false) avisarErro(d.aviso);
 
         txt.textContent = valor ? 'Sim' : 'Não';
         if (linha) linha.classList.toggle('is-fp', valor);
@@ -630,12 +706,64 @@ async function marcarFalsoPositivo(parId, valor, input) {
             setTimeout(() => carregar(paginaAtual), 350);
         } else {
             atualizarContadorFp(valor ? 1 : -1);
+            if (valor) carregar(paginaAtual);   // mostra o motivo na linha
         }
     } catch (e) {
         input.checked = !valor;          // desfaz o toggle se não salvou
-        alert('Não foi possível salvar a marcação: ' + e.message);
+        avisarErro('Não foi possível salvar a marcação: ' + e.message);
     } finally {
         input.disabled = false;
+    }
+}
+
+/** Marca que as duas escolas dividem a mesma estrutura física. */
+async function marcarMaeFilho(parId, valor, input) {
+    const txt = input.parentElement.querySelector('.txt');
+    input.disabled = true;
+    try {
+        const r = await fetch(`/api/painel/${encodeURIComponent(runAtual)}/falso-positivo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ par_id: parId, mae_filho: valor }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha ao salvar');
+        if (d.gravado_no_banco === false) avisarErro(d.aviso);
+
+        txt.textContent = valor ? 'Sim' : 'Não';
+        if ($('fMaeFilho') && $('fMaeFilho').value === 'ocultar' && valor) {
+            setTimeout(() => carregar(paginaAtual), 350);
+        }
+    } catch (e) {
+        input.checked = !valor;
+        avisarErro('Não foi possível salvar: ' + e.message);
+    } finally {
+        input.disabled = false;
+    }
+}
+
+/* ---------- motivo do falso positivo ---------- */
+
+let resolverMotivo = null;
+
+/** Promessa que resolve com {motivo_codigo, motivo} ou null se cancelar. */
+function pedirMotivo(parId) {
+    const p = dadosSelecionados.get(parId) || {};
+    $('mtResumo').textContent = p.escola_a
+        ? `${p.escola_a.inep} × ${p.escola_b.inep} · ${p.qtd_imagens} imagens iguais`
+        : parId;
+    $('mtTexto').value = '';
+    $('mtErro').hidden = true;
+    $('modalMotivo').hidden = false;
+    setTimeout(() => $('mtCodigo').focus(), 50);
+    return new Promise((resolve) => { resolverMotivo = resolve; });
+}
+
+function fecharModalMotivo(resposta) {
+    $('modalMotivo').hidden = true;
+    if (resolverMotivo) {
+        resolverMotivo(resposta);
+        resolverMotivo = null;
     }
 }
 

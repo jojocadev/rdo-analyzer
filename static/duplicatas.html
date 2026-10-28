@@ -98,6 +98,22 @@
                 </select>
             </div>
             <div class="field">
+                <label for="fEncaminhado">Enviado para auditoria</label>
+                <select id="fEncaminhado">
+                    <option value="">Mostrar todos</option>
+                    <option value="ocultar">Ocultar já enviados</option>
+                    <option value="somente">Só os já enviados</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="fMaeFilho">Escola mãe/filho</label>
+                <select id="fMaeFilho">
+                    <option value="">Mostrar todos</option>
+                    <option value="ocultar">Ocultar marcados</option>
+                    <option value="somente">Só os marcados</option>
+                </select>
+            </div>
+            <div class="field">
                 <label for="fMinImagens">Mínimo de imagens</label>
                 <select id="fMinImagens">
                     <option value="0">Qualquer</option>
@@ -208,6 +224,7 @@
                         <th class="blk-meio" colspan="2">Imagens duplicadas</th>
                         <th class="blk-para" colspan="2">Escola B · INEP 2</th>
                         <th class="blk-fp"   rowspan="2">Falso positivo</th>
+                        <th class="blk-mf"   rowspan="2">Mãe/filho</th>
                     </tr>
                     <tr class="cols">
                         <th style="min-width:190px;">Escola</th>
@@ -224,6 +241,30 @@
 
         <div class="pager" id="pager"></div>
     </section>
+</div>
+
+<!-- motivo do falso positivo: só abre ao MARCAR, não ao desmarcar -->
+<div class="modal" id="modalMotivo" hidden>
+    <div class="modal-box">
+        <h2><i class="fa-solid fa-circle-question"></i> Por que é falso positivo?</h2>
+        <p class="modal-resumo" id="mtResumo">—</p>
+
+        <label for="mtCodigo">Motivo</label>
+        <select id="mtCodigo"></select>
+
+        <label for="mtTexto">Detalhe (opcional)</label>
+        <textarea id="mtTexto" rows="3"
+                  placeholder="O que você verificou para concluir isso?"></textarea>
+
+        <div class="modal-erro" id="mtErro" hidden></div>
+
+        <div class="modal-acoes">
+            <button class="btn" id="mtCancelar">Cancelar</button>
+            <button class="btn btn-primary" id="mtConfirmar">
+                <i class="fa-solid fa-check"></i> Marcar
+            </button>
+        </div>
+    </div>
 </div>
 
 <!-- modal de envio para auditoria -->

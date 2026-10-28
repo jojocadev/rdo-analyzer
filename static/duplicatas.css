@@ -500,3 +500,26 @@ td.cel-doc { min-width: 168px; }
     color: #2b4c6e; font-size: .86rem;
 }
 .faixa-info .btn { margin-left: auto; }
+
+/* Coluna Mae/filho: duplicata legitima (as escolas dividem a estrutura), e nao
+   erro do sistema. Por isso fica ao lado do falso positivo, nao dentro dele. */
+.pares th.blk-mf { background: #eef4fb; color: #2b4c6e; min-width: 92px; }
+.tg-mf .slider { background: #c9d6e6; }
+.tg-mf input:checked + .slider { background: #4a7fb5; }
+
+/* Motivo registrado, logo abaixo do switch: quem revisa le sem abrir nada. */
+.motivo-nota {
+    margin-top: .3rem;
+    font-size: .68rem;
+    line-height: 1.25;
+    color: var(--text-2);
+    max-width: 150px;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* Linha de escola ja encaminhada para auditoria. */
+.pares tr.is-enc td { box-shadow: inset 3px 0 0 #9bb8d4; }
+.tag-enc { background: #e3edf7; color: #2b4c6e; border: 1px solid #bcd4ec; }

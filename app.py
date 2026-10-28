@@ -948,7 +948,7 @@ def painel_pares(run_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade", "evidencia")}
+        "gravidade", "evidencia", "encaminhado", "mae_filho")}
 
     filtrados = pares_duplicatas.aplicar_filtros(pares, filtros)
 
@@ -977,24 +977,58 @@ def painel_marcar_falso_positivo(run_id):
     if not par_id:
         return jsonify({"error": "par_id é obrigatório."}), 400
 
-    marcado = bool(data.get("falso_positivo"))
+    import marcacoes
+
+    # Os campos ausentes ficam como None de propósito: alternar mãe/filho não
+    # pode apagar o motivo do falso positivo que já estava escrito.
+    falso = data.get("falso_positivo")
+    mae_filho = data.get("mae_filho")
+    if falso is None and mae_filho is None:
+        return jsonify({"error": "Informe falso_positivo ou mae_filho."}), 400
+
+    codigo = (data.get("motivo_codigo") or "").strip() or None
+    if codigo and codigo not in marcacoes.CODIGOS:
+        return jsonify({"error": f"Motivo '{codigo}' não é uma opção válida."}), 400
+
+    # Os INEPs entram na linha para dar para consultar a marcação sem cruzar
+    # com o histórico da execução, que vive em disco.
+    inep_a = inep_b = None
+    _meta, pares = _obter_pares(run_id)
+    for p in (pares or []):
+        if p["par_id"] == par_id:
+            inep_a, inep_b = p["escola_a"]["inep"], p["escola_b"]["inep"]
+            break
+
     try:
-        marcas = pares_duplicatas.marcar(run_id, par_id, marcado)
+        marca = marcacoes.marcar(
+            run_id, par_id,
+            falso_positivo=None if falso is None else bool(falso),
+            motivo_codigo=codigo,
+            motivo=(data.get("motivo") or "").strip() or None,
+            mae_filho=None if mae_filho is None else bool(mae_filho),
+            inep_a=inep_a, inep_b=inep_b,
+            autor=(data.get("autor") or "").strip())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    # A marcação em si fica no arquivo da execução (é o que a tela lê a cada
-    # filtro), mas ela é um ajuste sobre a análise: o registro de que alguém
-    # julgou este par vai para a trilha, que não se perde com o disco.
-    import auditoria_db
-    auditoria_db.registrar_evento(
-        "falso_positivo_marcado" if marcado else "falso_positivo_desmarcado",
-        par_id=par_id, detalhe={"run_id": run_id})
-
     _obter_pares(run_id, invalidar=True)
-    return jsonify({"par_id": par_id,
-                    "falso_positivo": marcado,
-                    "total_marcados": len(marcas)})
+    return jsonify({
+        "par_id": par_id,
+        "falso_positivo": marca["falso_positivo"],
+        "mae_filho": marca["mae_filho"],
+        "motivo_codigo": marca.get("motivo_codigo") or "",
+        "motivo": marca.get("motivo") or "",
+        "gravado_no_banco": not marca.get("aviso"),
+        "aviso": marca.get("aviso") or "",
+    })
+
+
+@app.route("/api/painel/motivos", methods=["GET"])
+def painel_motivos():
+    """Categorias de motivo oferecidas no popup de falso positivo."""
+    import marcacoes
+    return jsonify({"motivos": [{"codigo": c, "rotulo": r}
+                                for c, r in marcacoes.MOTIVOS]})
 
 
 # --------------------------------------------------------------------------- #
@@ -1164,6 +1198,11 @@ def auditoria_criar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    # O filtro "já encaminhado" precisa refletir na hora, senão a linha que
+    # acabou de ir para auditoria continua aparecendo como pendente.
+    import marcacoes
+    marcacoes.invalidar_encaminhados()
+
     # `aviso` só vem preenchido quando o banco não aceitou a gravação. A tela
     # precisa mostrar isso: um envio que ficou só em disco não está seguro.
     return jsonify({"envio_id": envio["envio_id"], "resumo": envio["resumo"],
@@ -1206,7 +1245,7 @@ def auditoria_detalhe(envio_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade", "evidencia")}
+        "gravidade", "evidencia", "encaminhado", "mae_filho")}
     filtrados = pares_duplicatas.aplicar_filtros(pares, filtros)
 
     page = max(1, int(request.args.get("page", 1)))
@@ -1303,7 +1342,7 @@ def auditoria_csv(envio_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade", "evidencia")}
+        "gravidade", "evidencia", "encaminhado", "mae_filho")}
     return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
                          f"Auditoria_{envio_id}")
 
@@ -1372,7 +1411,7 @@ def painel_csv(run_id):
     filtros = {k: request.args.get(k, "") for k in (
         "busca", "contem", "nao_contem", "uf", "municipio", "fornecedor",
         "tipo", "falso_positivo", "min_imagens", "somente_fotos", "mesmo_municipio",
-        "gravidade", "evidencia")}
+        "gravidade", "evidencia", "encaminhado", "mae_filho")}
     return _csv_de_pares(pares_duplicatas.aplicar_filtros(pares, filtros),
                          f"Duplicatas_{run_id}")
 

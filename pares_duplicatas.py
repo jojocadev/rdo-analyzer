@@ -20,6 +20,7 @@ from itertools import combinations
 import analisar_fase as motor
 import classificar_imagem
 import geolocalizacao
+import marcacoes
 
 DIR_MINIATURAS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "extracted_images")
@@ -255,7 +256,14 @@ def montar_pares(run_id):
                     "paginas": set(),
                 })["paginas"].add(m.get("pagina"))
 
-    marcas = ler_marcas(run_id)
+    # Marcacoes da triagem: banco primeiro, com o arquivo antigo de falso
+    # positivo entrando como base para nao perder o que ja foi julgado antes de
+    # as marcacoes irem para o Supabase.
+    marcas = {k: dict(v) for k, v in ler_marcas(run_id).items()}
+    for par_id, marca in marcacoes.ler(run_id).items():
+        marcas.setdefault(par_id, {}).update(marca)
+
+    ineps_enviados, pares_enviados = marcacoes.ineps_encaminhados()
 
     # O que cada imagem compartilhada E. Sem isto, assinatura digitalizada, logo
     # da operadora e print de planilha entram como "duplicata" — eles circulam
@@ -310,7 +318,17 @@ def montar_pares(run_id):
 
         marca = marcas.get(par["par_id"]) or {}
         par["falso_positivo"] = bool(marca.get("falso_positivo"))
-        par["marcado_em"] = marca.get("marcado_em", "")
+        par["marcado_em"] = marca.get("marcado_em") or marca.get("atualizado_em") or ""
+        par["motivo_codigo"] = marca.get("motivo_codigo") or ""
+        par["motivo"] = marca.get("motivo") or ""
+        # Mae/filho: as duas escolas dividem a mesma estrutura, entao a foto
+        # repetida e legitima. Nao e falso positivo — a duplicata existe e esta
+        # correta — por isso e um estado separado.
+        par["mae_filho"] = bool(marca.get("mae_filho"))
+        par["ja_encaminhado"] = bool(
+            par["par_id"] in pares_enviados
+            or par["escola_a"]["inep"] in ineps_enviados
+            or par["escola_b"]["inep"] in ineps_enviados)
 
         lista.append(par)
 
@@ -387,6 +405,20 @@ def aplicar_filtros(pares, f):
     elif fp == "somente":
         out = [p for p in out if p["falso_positivo"]]
 
+    # Ja encaminhado para auditoria: quem esta triando nao precisa rever uma
+    # escola que ja esta sendo fiscalizada.
+    enc = (f.get("encaminhado") or "").strip()
+    if enc == "ocultar":
+        out = [p for p in out if not p.get("ja_encaminhado")]
+    elif enc == "somente":
+        out = [p for p in out if p.get("ja_encaminhado")]
+
+    mf = (f.get("mae_filho") or "").strip()
+    if mf == "ocultar":
+        out = [p for p in out if not p.get("mae_filho")]
+    elif mf == "somente":
+        out = [p for p in out if p.get("mae_filho")]
+
     try:
         min_imagens = int(f.get("min_imagens") or 0)
     except (TypeError, ValueError):
@@ -429,7 +461,7 @@ def resumo(pares):
     por_fornecedor = defaultdict(int)
     por_uf = defaultdict(int)
     imagens = fotos = exatas = fp = mesmo_pdf = pdf_div = fora_raio = 0
-    evidencias = so_material = 0
+    evidencias = so_material = mae_filho = encaminhados = 0
 
     for p in pares:
         escolas.add(p["escola_a"]["inep"])
@@ -442,6 +474,10 @@ def resumo(pares):
             so_material += 1
         if p["falso_positivo"]:
             fp += 1
+        if p.get("mae_filho"):
+            mae_filho += 1
+        if p.get("ja_encaminhado"):
+            encaminhados += 1
         if p.get("mesmo_pdf"):
             mesmo_pdf += 1
         if p.get("pdf_divergente"):
@@ -466,6 +502,8 @@ def resumo(pares):
         "evidencias": evidencias,
         "so_material_comum": so_material,
         "falsos_positivos": fp,
+        "mae_filho": mae_filho,
+        "ja_encaminhados": encaminhados,
         "pendentes": len(pares) - fp,
         "mesmo_municipio": sum(1 for p in pares if p["mesmo_municipio"]),
         "mesmo_pdf": mesmo_pdf,
