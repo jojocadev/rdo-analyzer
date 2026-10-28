@@ -859,10 +859,15 @@ def caminho_run(run_id):
 
 def salvar_run(run_id, meta, groups=None):
     """
-    Grava (ou atualiza) uma execucao no historico em disco.
+    Grava (ou atualiza) uma execucao no historico, em disco e no Supabase.
 
-    O historico fica em arquivos, nao em memoria: reiniciar o servidor nao apaga
-    nenhum resultado ja produzido.
+    O disco continua sendo a fonte rapida de leitura. O banco entra para que um
+    redeploy sem volume, ou uma maquina diferente da que rodou a varredura, nao
+    apague a execucao: so meta e grupos vao, que nao chegam a 1 MB.
+
+    Falhar no banco nao interrompe a varredura — o disco ja guardou tudo e a
+    tela avisa pelo /api/health. Perder a varredura inteira por causa de uma
+    indisponibilidade do Supabase seria pior que o problema.
     """
     run_dir = caminho_run(run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -871,6 +876,14 @@ def salvar_run(run_id, meta, groups=None):
     if groups is not None:
         with open(os.path.join(run_dir, "grupos.json"), "w", encoding="utf-8") as fh:
             json.dump(groups, fh, ensure_ascii=False)
+
+    try:
+        import execucoes_db
+        if execucoes_db.disponivel():
+            execucoes_db.salvar(meta, groups)
+    except Exception as e:
+        log(f"    [aviso] historico nao subiu para o Supabase: {e}")
+
     return run_dir
 
 
@@ -908,10 +921,16 @@ def ler_analisados(run_id):
 
 
 def carregar_run(run_id, com_grupos=True):
+    """
+    Meta de uma execucao. Disco primeiro, por ser mais rapido; o banco entra
+    quando a pasta nao existe neste container — num redeploy sem volume, ou
+    numa maquina diferente da que rodou a varredura.
+    """
     run_dir = caminho_run(run_id)
     meta_path = os.path.join(run_dir, "meta.json")
     if not os.path.exists(meta_path):
-        return None
+        return _do_banco(run_id, com_grupos)
+
     with open(meta_path, "r", encoding="utf-8") as fh:
         meta = json.load(fh)
     if com_grupos:
@@ -919,28 +938,67 @@ def carregar_run(run_id, com_grupos=True):
         if os.path.exists(grupos_path):
             with open(grupos_path, "r", encoding="utf-8") as fh:
                 meta["grupos"] = json.load(fh)
+        elif "grupos" not in meta:
+            do_banco = _do_banco(run_id, com_grupos=True)
+            if do_banco:
+                meta["grupos"] = do_banco.get("grupos", [])
     return meta
 
 
+def _do_banco(run_id, com_grupos=True):
+    """Reconstroi a execucao a partir do Supabase. None se nao estiver la."""
+    try:
+        import execucoes_db
+        if not execucoes_db.disponivel():
+            return None
+        return execucoes_db.carregar(run_id, com_grupos=com_grupos)
+    except Exception:
+        return None
+
+
 def listar_runs():
-    """Lista as execucoes do historico, da mais recente para a mais antiga."""
-    if not os.path.isdir(HISTORICO_DIR):
-        return []
-    runs = []
-    for run_id in os.listdir(HISTORICO_DIR):
-        meta = carregar_run(run_id, com_grupos=False)
-        if meta:
-            runs.append(meta)
+    """
+    Execucoes do historico, da mais recente para a mais antiga.
+
+    Junta disco e banco: o disco e a fonte rapida, o banco garante que uma
+    execucao feita em outro container continue aparecendo.
+    """
+    por_id = {}
+    if os.path.isdir(HISTORICO_DIR):
+        for run_id in os.listdir(HISTORICO_DIR):
+            meta = carregar_run(run_id, com_grupos=False)
+            if meta:
+                por_id[meta.get("run_id") or run_id] = meta
+
+    try:
+        import execucoes_db
+        if execucoes_db.disponivel():
+            for meta in execucoes_db.listar():
+                por_id.setdefault(meta.get("run_id"), meta)
+    except Exception:
+        pass
+
+    runs = [m for m in por_id.values() if m.get("run_id")]
     runs.sort(key=lambda m: m.get("iniciado_em", ""), reverse=True)
     return runs
 
 
 def excluir_run(run_id):
+    """Apaga a execucao do disco e do banco — senao ela reapareceria na lista."""
+    removido = False
     run_dir = caminho_run(run_id)
     if os.path.isdir(run_dir):
         shutil.rmtree(run_dir, ignore_errors=True)
-        return True
-    return False
+        removido = True
+
+    try:
+        import execucoes_db
+        if execucoes_db.disponivel():
+            execucoes_db.excluir(run_id)
+            removido = True
+    except Exception:
+        pass
+    return removido
 
 
 # --------------------------------------------------------------------------- #

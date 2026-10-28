@@ -76,6 +76,8 @@ def health():
     causa real. O campo `supabase` diz se a variavel de ambiente chegou.
     """
     import auditoria_db
+    import execucoes_db
+    import marcacoes
     return jsonify({
         "ok": True,
         "supabase": bool(SERVICE_KEY),
@@ -83,6 +85,10 @@ def health():
         "auditoria_no_banco": auditoria_db.disponivel(),
         "auditoria_backend": auditoria_db.backend(),
         "auditoria_pendentes": len(auditoria_db.listar_pendentes()),
+        # Cada um degrada para disco por conta própria: o painel continua
+        # funcionando com qualquer um deles fora, e aqui se vê qual está fora.
+        "marcacoes_no_banco": marcacoes.disponivel(),
+        "historico_no_banco": execucoes_db.disponivel(),
     })
 
 

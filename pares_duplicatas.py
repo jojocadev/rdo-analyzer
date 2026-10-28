@@ -150,6 +150,15 @@ def classes_da_execucao(run_id, imagens, coordenadas):
                 cache = json.load(fh)
         except Exception:
             cache = {}
+    else:
+        # Sem o arquivo local: o banco pode ter a classificação desta execução,
+        # e reclassificar exige as miniaturas, que talvez nem estejam aqui.
+        try:
+            import execucoes_db
+            if execucoes_db.disponivel():
+                cache = execucoes_db.classes_de(run_id) or {}
+        except Exception:
+            cache = {}
 
     faltando = [(sha, thumb) for sha, thumb in imagens.items() if sha not in cache]
 
@@ -175,6 +184,14 @@ def classes_da_execucao(run_id, imagens, coordenadas):
                 json.dump(cache, fh)
         except Exception:
             pass        # sem cache a tela só fica mais lenta; não é motivo de erro
+        try:
+            import execucoes_db
+            if execucoes_db.disponivel():
+                meta = motor.carregar_run(run_id, com_grupos=False)
+                if meta:
+                    execucoes_db.salvar(meta, grupos=None, classes=cache)
+        except Exception:
+            pass
     return cache
 
 
