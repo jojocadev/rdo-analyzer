@@ -125,12 +125,28 @@ def serve_thumb(filename):
     
     # Busca flexível por SHA256 prefix
     sha_prefix = filename.split("_")[0]
-    if sha_prefix:
+    if sha_prefix and os.path.isdir(CACHE_DIR):
         matches = [f for f in os.listdir(CACHE_DIR) if f.startswith(sha_prefix)]
         if matches:
             return send_from_directory(CACHE_DIR, matches[0])
-            
-    return send_from_directory("static", "index.html"), 404
+
+    # Container sem o volume de extracted_images: a miniatura das evidências
+    # vem do Storage e fica em cache local, para o próximo acesso não repetir
+    # a ida ao Supabase.
+    import execucoes_db
+    conteudo = execucoes_db.baixar_miniatura(filename)
+    if conteudo:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(file_path, "wb") as fh:
+                fh.write(conteudo)
+            return send_from_directory(CACHE_DIR, filename)
+        except Exception:
+            return app.response_class(conteudo, mimetype="image/jpeg")
+
+    # 404 de verdade, com corpo vazio: devolver o index.html aqui fazia o
+    # navegador baixar 35 KB de HTML para cada imagem que faltasse.
+    return "", 404
 
 def sanitize_json(obj):
     """Converte recursivamente numpy int64/float64 e outros objetos para tipos Python nativos."""

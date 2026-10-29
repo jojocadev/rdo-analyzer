@@ -313,7 +313,14 @@ def montar_pares(run_id):
         # de vistoria. Zero aqui significa que as escolas so compartilham
         # material de escritorio, e o par nao e achado.
         par["qtd_evidencias"] = sum(1 for i in imagens if i["evidencia"])
-        par["so_material_comum"] = par["qtd_evidencias"] == 0
+        # Imagem que nao deu para classificar — o arquivo da miniatura nao esta
+        # nesta maquina. Contada a parte: nao saber o que a imagem e NAO e o
+        # mesmo que saber que ela nao e foto.
+        par["qtd_indefinidas"] = sum(
+            1 for i in imagens if i["classe"] == classificar_imagem.INDEFINIDO)
+        # "So material comum" exige certeza: todas classificadas, nenhuma foto.
+        par["so_material_comum"] = (par["qtd_evidencias"] == 0
+                                    and par["qtd_indefinidas"] == 0)
         par["classes"] = sorted({i["classe"] for i in imagens})
         par["todas_exatas"] = par["qtd_exatas"] == len(imagens)
         par["mesmo_municipio"] = bool(par["escola_a"]["municipio"]) and \
@@ -455,11 +462,16 @@ def aplicar_filtros(pares, f):
     # Tipo de evidencia. O padrao da tela e "com_foto": par que so compartilha
     # assinatura, logo ou print nao e achado, e eram 38 dos 101 da fase 5.
     # Nada e descartado — "tudo" traz os dois, "sem_foto" isola os excluidos.
+    # Na duvida, mostra. Par com imagem que nao deu para classificar continua
+    # aparecendo em "so com foto de vistoria": esconder por falta de dado faria
+    # um achado real sumir da triagem sem ninguem perceber — e foi o que
+    # aconteceu quando as miniaturas de uma execucao se perderam.
     evidencia = (f.get("evidencia") or "").strip()
     if evidencia == "com_foto":
-        out = [p for p in out if p.get("qtd_evidencias", 0) > 0]
+        out = [p for p in out
+               if p.get("qtd_evidencias", 0) > 0 or p.get("qtd_indefinidas", 0) > 0]
     elif evidencia == "sem_foto":
-        out = [p for p in out if not p.get("qtd_evidencias", 0)]
+        out = [p for p in out if p.get("so_material_comum")]
 
     gravidade = (f.get("gravidade") or "").strip()
     if gravidade == "fora_do_raio":

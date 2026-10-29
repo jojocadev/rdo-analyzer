@@ -40,6 +40,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--simular", action="store_true",
                     help="Nao grava; so mostra o que seria enviado")
+    ap.add_argument("--sem-miniaturas", dest="miniaturas", action="store_false",
+                    default=True,
+                    help="Nao sobe as miniaturas das evidencias para o Storage")
     args = ap.parse_args()
 
     print("=" * 68)
@@ -91,6 +94,16 @@ def main():
         except Exception as e:
             falhas += 1
             print(f"      FALHOU: {e}")
+            continue
+
+        if args.miniaturas and grupos:
+            r = execucoes_db.subir_miniaturas(
+                grupos, os.path.join(BASE_DIR, "extracted_images"),
+                progresso=lambda i, n: print(f"      miniaturas {i}/{n}",
+                                             end="\r", flush=True))
+            print(f"      miniaturas: {r['enviadas']} enviadas"
+                  + (f", {r['faltando']} nao estavam no disco" if r["faltando"] else "")
+                  + "                    ")
 
     if args.simular:
         print("\n[SIMULACAO] Nada foi gravado.")

@@ -229,6 +229,51 @@ def _json_do_arquivo(caminho):
         return None
 
 
+PREFIXO_MINIATURAS = "miniaturas"
+
+
+def subir_miniaturas(grupos, dir_thumbs, progresso=None):
+    """
+    Sobe para o Storage so as miniaturas que aparecem em algum grupo.
+
+    Por que so essas: extracted_images tem 53 GB, porque guarda TODA imagem
+    extraida de TODO PDF. Mas o painel so exibe as que se repetem entre escolas
+    — algumas centenas por execucao, uns 50 MB. Sao elas a evidencia; o resto e
+    subproduto da extracao e se refaz rodando a varredura de novo.
+
+    Sem isto, um container sem o volume de extracted_images mostra a analise
+    inteira com os quadradinhos de imagem quebrada, que foi o que aconteceu.
+    """
+    nomes = []
+    for g in grupos or []:
+        for m in g.get("membros") or []:
+            if m.get("thumb_url"):
+                nomes.append(m["thumb_url"])
+    nomes = sorted(set(nomes))
+
+    enviadas = faltando = 0
+    for i, nome in enumerate(nomes, 1):
+        caminho = os.path.join(dir_thumbs, nome)
+        if not os.path.exists(caminho):
+            faltando += 1
+            continue
+        try:
+            with open(caminho, "rb") as fh:
+                auditoria_db.subir_arquivo(f"{PREFIXO_MINIATURAS}/{nome}",
+                                           fh.read(), "image/jpeg")
+            enviadas += 1
+        except auditoria_db.BancoIndisponivel:
+            faltando += 1
+        if progresso and i % 25 == 0:
+            progresso(i, len(nomes))
+    return {"total": len(nomes), "enviadas": enviadas, "faltando": faltando}
+
+
+def baixar_miniatura(nome):
+    """Conteudo de uma miniatura guardada no Storage, ou None."""
+    return auditoria_db.baixar_arquivo(f"{PREFIXO_MINIATURAS}/{nome}")
+
+
 def excluir(run_id):
     alvo = urllib.parse.quote(run_id)
     auditoria_db._chamar(f"{auditoria_db.SUPABASE_URL}/{TABELA}?run_id=eq.{alvo}",

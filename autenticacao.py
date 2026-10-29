@@ -32,10 +32,16 @@ from flask import jsonify, make_response, request
 
 COOKIE = "painel_token"
 
-# A sonda de saude e os estaticos da propria pagina (a pagina em si e protegida;
-# sem isso o navegador pediria o token para cada arquivo).
+# So a sonda de saude fica aberta. Ela nao devolve dado nenhum.
+#
+# Houve aqui uma lista de extensoes liberadas (.css, .js, .png, .jpg...) para os
+# estaticos da pagina carregarem. Era um buraco: as miniaturas das evidencias
+# sao servidas em /extracted_images/<nome>.jpg, entao a lista deixava as
+# IMAGENS da fiscalizacao publicas — justamente o conteudo mais sensivel.
+#
+# Nao e preciso liberar nada: a pagina so e entregue a quem ja passou pelo
+# token, e o navegador manda o cookie nos pedidos dos arquivos dela.
 ABERTAS = ("/api/health",)
-EXTENSOES_ABERTAS = (".css", ".js", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2")
 
 
 _ARQUIVO_TOKEN = os.path.join(
@@ -118,9 +124,7 @@ def _via_https():
 
 
 def _aberta(caminho):
-    if caminho in ABERTAS:
-        return True
-    return caminho.lower().endswith(EXTENSOES_ABERTAS)
+    return caminho in ABERTAS
 
 
 def instalar(app):
