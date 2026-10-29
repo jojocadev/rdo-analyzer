@@ -82,6 +82,7 @@ def health():
         "ok": True,
         "supabase": bool(SERVICE_KEY),
         "ocr": _ocr_disponivel(),
+        "ocr_motivo": _ocr_estado()[1],
         "auditoria_no_banco": auditoria_db.disponivel(),
         "auditoria_backend": auditoria_db.backend(),
         "auditoria_pendentes": len(auditoria_db.listar_pendentes()),
@@ -94,11 +95,21 @@ def health():
 
 def _ocr_disponivel():
     """A conferencia geografica depende do rapidocr, que e opcional na imagem."""
+    return _ocr_estado()[0]
+
+
+def _ocr_estado():
+    """
+    (disponivel, motivo). O motivo importa: o rapidocr pode estar instalado e
+    ainda assim nao importar, porque o onnxruntime precisa de biblioteca do
+    sistema que a imagem slim nao traz. Sem o texto do erro, isso vira
+    adivinhacao.
+    """
     try:
         import rapidocr_onnxruntime  # noqa: F401
-        return True
-    except Exception:
-        return False
+        return True, ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
 @app.route("/extracted_images/<path:filename>")
 def serve_thumb(filename):

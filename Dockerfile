@@ -9,7 +9,13 @@ ENV OPENBLAS_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1 \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib/apt/lists/*
+# libgomp1 e libgl1/libglib2.0-0 nao vem na imagem slim e sao exigidas pelo
+# onnxruntime e pelo opencv que o rapidocr carrega. Sem elas o pacote instala
+# mas o import falha em runtime, e a conferencia geografica aparece como
+# indisponivel sem dizer por que.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential curl libgomp1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
