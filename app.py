@@ -1029,6 +1029,22 @@ def painel_marcar_falso_positivo(run_id):
     })
 
 
+@app.route("/api/historico/sincronizar", methods=["POST", "GET"])
+def historico_sincronizar():
+    """
+    Sobe para o banco as execucoes que estao so no disco deste container.
+
+    Aceita GET de proposito: e disparada uma vez, pelo navegador, logo depois de
+    um deploy — exigir POST obrigaria a abrir terminal para uma tarefa que o
+    operador precisa resolver sozinho.
+    """
+    import execucoes_db
+    try:
+        return jsonify(execucoes_db.sincronizar_do_disco())
+    except Exception as e:
+        return jsonify({"ok": False, "motivo": str(e)}), 500
+
+
 @app.route("/api/painel/motivos", methods=["GET"])
 def painel_motivos():
     """Categorias de motivo oferecidas no popup de falso positivo."""
@@ -1441,6 +1457,35 @@ def download_report():
         download_name="Relatorio_Duplicatas_RDO.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+def _sincronizar_historico_na_subida():
+    """
+    Sobe ao banco, uma vez por subida, as execucoes que so existem no disco.
+
+    Resolve o container recem-criado sem ninguem precisar abrir terminal: a
+    varredura que rodou antes de o historico ir para o banco entra sozinha no
+    proximo restart. Roda em thread para nao atrasar o start, e so envia o que
+    falta — um restart normal nao reescreve nada.
+    """
+    def tarefa():
+        try:
+            import execucoes_db
+            r = execucoes_db.sincronizar_do_disco()
+            if not r.get("ok"):
+                print(f">>> historico: {r.get('motivo')}", flush=True)
+            elif r.get("enviadas"):
+                print(f">>> historico: {r['enviadas']} execucao(oes) enviadas ao "
+                      f"Supabase {r.get('novas')}", flush=True)
+        except Exception as e:
+            print(f">>> historico: falha ao sincronizar ({e})", flush=True)
+
+    threading.Thread(target=tarefa, daemon=True).start()
+
+
+# Fora do __main__ de proposito: com gunicorn na VPS o __main__ nunca roda, e e
+# justamente la que a sincronizacao precisa acontecer.
+_sincronizar_historico_na_subida()
+
 
 if __name__ == "__main__":
     print("=====================================================")

@@ -14,6 +14,9 @@ em si podem faltar — mas a analise, os grupos e os pares voltam inteiros.
 As tabelas sao criadas por sql/execucoes.sql.
 """
 
+import io
+import json
+import os
 import time
 import urllib.parse
 
@@ -157,6 +160,73 @@ def classes_de(run_id):
     linhas = auditoria_db._chamar(
         f"{auditoria_db.SUPABASE_URL}/{TABELA}?select=classes&run_id=eq.{alvo}&limit=1")
     return (linhas or [{}])[0].get("classes") or {}
+
+
+def run_ids_no_banco():
+    """So os identificadores, para comparar com o disco sem baixar tudo."""
+    linhas = auditoria_db._chamar(
+        f"{auditoria_db.SUPABASE_URL}/{TABELA}?select=run_id&limit=2000")
+    return {l["run_id"] for l in (linhas or [])}
+
+
+def sincronizar_do_disco(so_faltantes=True):
+    """
+    Sobe para o banco as execucoes que estao em disco.
+
+    Serve ao container recem-criado: a varredura rodou antes de o historico ir
+    para o banco, e sem isto ela existiria so no volume. Roda sozinha na subida
+    da aplicacao e tambem da para disparar pela rota /api/historico/sincronizar.
+
+    Com `so_faltantes`, pula o que ja esta la — e o caso normal, e evita
+    reescrever centenas de grupos a cada reinicio.
+    """
+    import analisar_fase as motor
+
+    if not disponivel(forcar=True):
+        return {"ok": False, "motivo": motivo_indisponivel(),
+                "enviadas": 0, "ja_estavam": 0, "falhas": 0}
+
+    if not os.path.isdir(motor.HISTORICO_DIR):
+        return {"ok": True, "motivo": "", "enviadas": 0, "ja_estavam": 0,
+                "falhas": 0, "detalhe": "sem pasta historico/"}
+
+    existentes = run_ids_no_banco() if so_faltantes else set()
+    enviadas, ja_estavam, falhas, nomes = 0, 0, 0, []
+
+    for run_id in sorted(os.listdir(motor.HISTORICO_DIR)):
+        run_dir = os.path.join(motor.HISTORICO_DIR, run_id)
+        if not os.path.isdir(run_dir):
+            continue
+        if run_id in existentes:
+            ja_estavam += 1
+            continue
+
+        meta = _json_do_arquivo(os.path.join(run_dir, "meta.json"))
+        if not meta:
+            continue
+        meta.setdefault("run_id", run_id)
+        grupos = _json_do_arquivo(os.path.join(run_dir, "grupos.json")) or []
+        classes = _json_do_arquivo(os.path.join(run_dir, "classes_imagens.json")) or {}
+
+        try:
+            salvar(meta, grupos, classes)
+            enviadas += 1
+            nomes.append(run_id)
+        except Exception:
+            falhas += 1
+
+    return {"ok": True, "motivo": "", "enviadas": enviadas,
+            "ja_estavam": ja_estavam, "falhas": falhas, "novas": nomes}
+
+
+def _json_do_arquivo(caminho):
+    if not os.path.exists(caminho):
+        return None
+    try:
+        with io.open(caminho, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
 
 
 def excluir(run_id):
