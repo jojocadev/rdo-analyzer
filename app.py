@@ -19,6 +19,11 @@ from flask_cors import CORS
 from analyzer import RDOImageAnalyzer
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+
+# Antes de qualquer rota: o servico roda em URL publica, entao a barreira
+# precisa valer para tudo que for registrado depois daqui.
+import autenticacao
+autenticacao.instalar(app)
 CORS(app)
 
 # Ferramenta local em evolução: sem isso o navegador serve app.js/fase.js do cache e
@@ -83,6 +88,7 @@ def health():
         "supabase": bool(SERVICE_KEY),
         "ocr": _ocr_disponivel(),
         "ocr_motivo": _ocr_estado()[1],
+        "autenticacao": bool(autenticacao.token_configurado()),
         "auditoria_no_banco": auditoria_db.disponivel(),
         "auditoria_backend": auditoria_db.backend(),
         "auditoria_pendentes": len(auditoria_db.listar_pendentes()),

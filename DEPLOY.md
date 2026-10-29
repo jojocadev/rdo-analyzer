@@ -10,7 +10,27 @@ Em **Environment**, no serviço do EasyPanel:
 ```
 SUPABASE_URL=https://<projeto>.supabase.co/rest/v1
 SUPABASE_SERVICE_KEY=<a service_role>
+PAINEL_TOKEN=<uma senha longa e aleatória>
 ```
+
+**`PAINEL_TOKEN` não é opcional em produção.** Sem ele o painel fica aberto a
+quem souber a URL: dá para ler os envios de auditoria, disparar uma varredura de
+35 minutos, baixar as evidências e apagar registros. Com ele, tudo exige o token
+— exceto `/api/health`, que a sonda do EasyPanel precisa alcançar e que não
+devolve dado nenhum.
+
+O token chega por `Authorization: Bearer`, pelo cabeçalho `X-Painel-Token`, ou
+por `?token=` na URL (o caso do iframe); na primeira vez vira cookie e some da
+barra de endereço. Quem abrir a página sem token vê um campo para digitá-lo.
+
+Para embutir no Bubble, declare quem pode:
+
+```
+PAINEL_FRAME_ANCESTORS=https://seu-app.bubbleapps.io
+```
+
+Sem essa variável o padrão é `X-Frame-Options: SAMEORIGIN` — nenhum site externo
+consegue embutir, o que é o certo enquanto o iframe não estiver definido.
 
 Sem a segunda variável o painel ainda sobe e serve o histórico já em disco, mas
 qualquer varredura nova responde `401 Unauthorized`. Para conferir depois do
