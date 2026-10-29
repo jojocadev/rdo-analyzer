@@ -102,6 +102,21 @@ def _token_da_requisicao():
             or "")
 
 
+def _via_https():
+    """
+    Se o NAVEGADOR esta em https, que nao e o mesmo que request.is_secure.
+
+    Na VPS o proxy do EasyPanel termina o TLS e encaminha http simples para o
+    container: para o Flask a requisicao nao e segura, embora para o usuario
+    seja. Sem olhar o X-Forwarded-Proto, o cookie sairia sem Secure e o
+    navegador o recusaria dentro do iframe.
+    """
+    if request.is_secure:
+        return True
+    proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+    return proto.lower() == "https"
+
+
 def _aberta(caminho):
     if caminho in ABERTAS:
         return True
@@ -139,16 +154,27 @@ def instalar(app):
         Token que veio pela URL vira cookie, para a navegacao seguinte nao
         precisar carrega-lo — e para ele sair da barra de endereco.
         """
+        origens = (os.environ.get("PAINEL_FRAME_ANCESTORS") or "").strip()
+
         if request.args.get("token") and resp.status_code < 400:
             if _confere(request.args.get("token")):
-                resp.set_cookie(COOKIE, token_configurado(), httponly=True,
-                                samesite="Lax", secure=request.is_secure,
-                                max_age=60 * 60 * 24 * 30)
-        # Limita quem pode embutir a pagina num iframe. Sem isto qualquer site
-        # consegue, e o clique do usuario vale como autenticado pelo cookie.
-        origens = (os.environ.get("PAINEL_FRAME_ANCESTORS") or "").strip()
+                # Dentro de um iframe de outro dominio, o navegador so manda o
+                # cookie com SameSite=None, e ele exige Secure. Com Lax, o
+                # painel autenticaria na primeira tela e perderia a sessao na
+                # navegacao seguinte — sem erro visivel, so parando de funcionar.
+                https = _via_https()
+                em_iframe = bool(origens) and https
+                resp.set_cookie(
+                    COOKIE, token_configurado(), httponly=True,
+                    samesite="None" if em_iframe else "Lax",
+                    secure=https,
+                    max_age=60 * 60 * 24 * 30)
+
+        # Quem pode embutir a pagina. Sem a variavel, ninguem de fora — o padrao
+        # seguro. Com ela, exatamente as origens declaradas.
         if origens:
             resp.headers["Content-Security-Policy"] = f"frame-ancestors {origens}"
+            resp.headers.pop("X-Frame-Options", None)
         else:
             resp.headers["X-Frame-Options"] = "SAMEORIGIN"
         return resp
