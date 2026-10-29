@@ -13,11 +13,13 @@ SUPABASE_SERVICE_KEY=<a service_role>
 PAINEL_TOKEN=<uma senha longa e aleatória>
 ```
 
-**`PAINEL_TOKEN` não é opcional em produção.** Sem ele o painel fica aberto a
-quem souber a URL: dá para ler os envios de auditoria, disparar uma varredura de
-35 minutos, baixar as evidências e apagar registros. Com ele, tudo exige o token
-— exceto `/api/health`, que a sonda do EasyPanel precisa alcançar e que não
-devolve dado nenhum.
+**O painel nunca fica aberto.** Se `PAINEL_TOKEN` não estiver definido, um
+token é gerado na subida e impresso no log do container — procure por
+"Token gerado para esta instalação". Tudo exige o token, exceto `/api/health`,
+que a sonda do EasyPanel precisa alcançar e que não devolve dado nenhum.
+
+Definir a variável é melhor mesmo assim: o token gerado muda se o volume de
+`/app/auditoria` não estiver montado, e aí é preciso reler o log a cada deploy.
 
 O token chega por `Authorization: Bearer`, pelo cabeçalho `X-Painel-Token`, ou
 por `?token=` na URL (o caso do iframe); na primeira vez vira cookie e some da
@@ -52,10 +54,11 @@ O `storage` grava os mesmos registros como objetos JSON no bucket
 `auditoria-docs`, que ocupa alguns KB. Não perde nada: sem o disco local, os
 registros voltam do Supabase.
 
-**Os arquivos de resolução ficam no disco da VPS**, não no Supabase — em
-`/app/auditoria/documentos/<envio>/<inep>/`. O banco guarda nome, tamanho e
-`sha256` de cada um, então o registro de que o documento existiu sobrevive de
-qualquer forma; mas **o arquivo em si depende do volume estar montado**.
+**Os arquivos de resolução ficam em dois lugares**: no disco da VPS, em
+`/app/auditoria/documentos/<envio>/<inep>/`, e no bucket `auditoria-docs`. São
+algumas centenas de KB por parecer, então guardar nos dois custa quase nada e
+tira a evidência da auditoria da dependência de o volume estar certo. Se o disco
+não tiver o arquivo, o download o busca do Storage e o regrava.
 
 **Para habilitar consulta por SQL** (opcional, recomendado): cole
 [sql/auditoria.sql](sql/auditoria.sql) no SQL Editor do projeto e execute; cria

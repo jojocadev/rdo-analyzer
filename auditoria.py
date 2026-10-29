@@ -343,15 +343,24 @@ def caminho_documento(arquivo_path):
     """
     Caminho absoluto de um documento, barrando saida da pasta de documentos.
 
-    O arquivo mora no disco da VPS, por decisao de projeto — o Supabase guarda
-    so o metadado. Isso significa que `auditoria/documentos/` PRECISA estar num
-    volume: sem volume, o redeploy leva os arquivos junto. O registro de que
-    existiram sobrevive no banco, com nome, tamanho e sha256.
+    O arquivo fica no disco da VPS E no Storage do Supabase. Se o disco nao
+    tiver (container recem-criado, volume nao montado), baixa do Storage para o
+    mesmo lugar e segue — e por isso que o parecer nao depende mais de o volume
+    estar configurado certo.
     """
     destino = os.path.normpath(os.path.join(DIR_DOCS, arquivo_path))
     if not destino.startswith(os.path.normpath(DIR_DOCS) + os.sep):
         raise ValueError("Caminho inválido.")
-    return destino if os.path.exists(destino) else None
+    if os.path.exists(destino):
+        return destino
+
+    conteudo = auditoria_db.baixar_arquivo(arquivo_path)
+    if conteudo:
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "wb") as fh:
+            fh.write(conteudo)
+        return destino
+    return None
 
 
 def excluir_documento(envio_id, doc_id):

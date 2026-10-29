@@ -26,6 +26,7 @@ subida. Em producao, defina.
 
 import hmac
 import os
+import secrets
 
 from flask import jsonify, make_response, request
 
@@ -37,8 +38,50 @@ ABERTAS = ("/api/health",)
 EXTENSOES_ABERTAS = (".css", ".js", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2")
 
 
+_ARQUIVO_TOKEN = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "auditoria", ".painel_token")
+
+_gerado = {"token": ""}
+
+
 def token_configurado():
-    return (os.environ.get("PAINEL_TOKEN") or "").strip()
+    """
+    O token em vigor. Nunca vazio: se PAINEL_TOKEN nao estiver definido, um e
+    gerado e impresso no log da aplicacao.
+
+    Por que nao deixar aberto quando falta a variavel: o servico roda em URL
+    publica com dado de fiscalizacao. Ficar aberto "ate alguem lembrar de
+    configurar" e justamente como ele passou dias exposto. Falhar fechado
+    obriga a buscar o token no log uma vez, o que e um custo pequeno perto de
+    deixar a auditoria legivel para qualquer um.
+    """
+    do_ambiente = (os.environ.get("PAINEL_TOKEN") or "").strip()
+    if do_ambiente:
+        return do_ambiente
+    if _gerado["token"]:
+        return _gerado["token"]
+
+    # Reaproveita o token da ultima subida quando a pasta e um volume: assim o
+    # cookie de quem ja entrou continua valendo depois de um restart.
+    try:
+        if os.path.exists(_ARQUIVO_TOKEN):
+            with open(_ARQUIVO_TOKEN, encoding="utf-8") as fh:
+                guardado = fh.read().strip()
+            if guardado:
+                _gerado["token"] = guardado
+                return guardado
+    except Exception:
+        pass
+
+    novo = secrets.token_urlsafe(24)
+    _gerado["token"] = novo
+    try:
+        os.makedirs(os.path.dirname(_ARQUIVO_TOKEN), exist_ok=True)
+        with open(_ARQUIVO_TOKEN, "w", encoding="utf-8") as fh:
+            fh.write(novo)
+    except Exception:
+        pass
+    return novo
 
 
 def _confere(enviado):
@@ -68,16 +111,18 @@ def _aberta(caminho):
 def instalar(app):
     """Liga a verificacao em todas as rotas do app."""
 
-    esperado = token_configurado()
-    if not esperado:
-        print(">>> [ATENCAO] PAINEL_TOKEN nao definido: o painel esta aberto a "
-              "quem tiver a URL. Defina a variavel no ambiente do servico.",
-              flush=True)
+    if (os.environ.get("PAINEL_TOKEN") or "").strip():
+        print(">>> Acesso protegido por PAINEL_TOKEN.", flush=True)
+    else:
+        print("\n" + "=" * 62, flush=True)
+        print(">>> PAINEL_TOKEN nao definido. Token gerado para esta instalacao:", flush=True)
+        print(f"\n        {token_configurado()}\n", flush=True)
+        print(">>> Use ?token=<acima> na primeira vez, ou defina PAINEL_TOKEN", flush=True)
+        print(">>> no ambiente do servico para fixar um token seu.", flush=True)
+        print("=" * 62 + "\n", flush=True)
 
     @app.before_request
     def _exigir_token():
-        if not token_configurado():
-            return None                      # sem token configurado, segue aberto
         if request.method == "OPTIONS" or _aberta(request.path):
             return None
         if _confere(_token_da_requisicao()):
@@ -94,7 +139,7 @@ def instalar(app):
         Token que veio pela URL vira cookie, para a navegacao seguinte nao
         precisar carrega-lo — e para ele sair da barra de endereco.
         """
-        if token_configurado() and request.args.get("token") and resp.status_code < 400:
+        if request.args.get("token") and resp.status_code < 400:
             if _confere(request.args.get("token")):
                 resp.set_cookie(COOKIE, token_configurado(), httponly=True,
                                 samesite="Lax", secure=request.is_secure,

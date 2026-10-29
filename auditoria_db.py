@@ -341,10 +341,6 @@ def _storage_pares_do_envio(envio_id):
 
 
 def _storage_salvar_documento(doc, conteudo):
-    # O arquivo em si fica no disco da VPS, por decisao de projeto: encher o
-    # Supabase com PDF de parecer nao compensa. Aqui vai so o metadado, que
-    # inclui tamanho e sha256 — da para provar o que foi anexado mesmo se o
-    # arquivo se perder.
     indice = _ler_json(_obj_documentos(doc["envio_id"])) or []
     limpo = {k: v for k, v in doc.items() if k not in ("aviso", "gravado_no_banco")}
     indice = [d for d in indice if d.get("doc_id") != doc["doc_id"]] + [limpo]
@@ -519,6 +515,19 @@ def salvar_documento(doc, conteudo):
         "criado_em": doc.get("criado_em"),
     }
     try:
+        # O arquivo vai TAMBEM para o Storage, alem do disco da VPS.
+        #
+        # A escolha original foi disco, para nao encher o Supabase com PDF de
+        # parecer. Mas sao algumas centenas de KB por documento, e sem volume
+        # montado um redeploy leva todos — foi assim que a execucao de 27/10 se
+        # perdeu. Guardar nos dois lugares custa quase nada e tira a evidencia
+        # da auditoria da dependencia de um volume estar configurado certo.
+        try:
+            subir_arquivo(doc["arquivo_path"], conteudo, doc.get("tipo_mime"))
+            linha["bucket"] = BUCKET
+        except BancoIndisponivel:
+            pass          # o disco ja tem; o metadado registra onde ficou
+
         if backend() == STORAGE_BACKEND:
             _storage_salvar_documento(doc, conteudo)
         else:
