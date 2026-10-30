@@ -36,12 +36,22 @@ const dadosSelecionados = new Map();   // par_id -> dados, para quem for enviar 
 
 
 document.addEventListener('DOMContentLoaded', async () => {
-    ligarEventos();
-    await carregarExecucoes();
-    if (runAtual) carregar(1);
-    retomarGeo();
-    conferirPersistencia();
-    carregarMotivos();
+    // Cada etapa isolada: um erro ao ligar um botão não pode impedir a tabela
+    // de carregar. Antes, um campo ausente numa das duas páginas derrubava
+    // ligarEventos() e a tela ficava em "Carregando execução…" sem dizer nada.
+    const passo = async (nome, fn) => {
+        try { await fn(); } catch (e) {
+            console.error(`[painel] falha em ${nome}:`, e);
+            avisarErro(`Parte da tela não carregou (${nome}). Veja o console.`);
+        }
+    };
+
+    await passo('eventos', ligarEventos);
+    await passo('execuções', carregarExecucoes);
+    if (runAtual) await passo('tabela', () => carregar(1));
+    await passo('geolocalização', retomarGeo);
+    await passo('persistência', conferirPersistencia);
+    await passo('motivos', carregarMotivos);
 });
 
 function ligarEventos() {
@@ -79,10 +89,16 @@ function ligarEventos() {
         $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') carregar(1); }));
 
     // Os seletores aplicam na hora — são escolhas discretas, não digitação
+    // As duas páginas compartilham este arquivo e não têm os mesmos filtros:
+    // a auditoria não traz "já encaminhado" nem "mãe/filho". Acessar um campo
+    // ausente aqui derruba ligarEventos() inteira, e como ela roda antes de
+    // tudo, a página fica em "Carregando execução…" para sempre.
     ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fFp',
      'fMinImagens', 'fFotos', 'fMesmoMunicipio', 'fGravidade', 'fEvidencia',
-     'fEncaminhado', 'fMaeFilho'].forEach((id) =>
-        $(id).addEventListener('change', () => carregar(1)));
+     'fEncaminhado', 'fMaeFilho'].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener('change', () => carregar(1));
+    });
 
     // A pagina de auditoria nao tem coluna de selecao nem botao de envio.
     const liga = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
@@ -180,9 +196,11 @@ function limparFiltros() {
     ['fBusca', 'fTexto'].forEach((id) => ($(id).value = ''));
     // volta ao padrao: material de escritorio repetido nao e achado
     if ($('fEvidencia')) $('fEvidencia').value = 'com_foto';
-    ['fEncaminhado', 'fMaeFilho'].forEach((id) => { if ($(id)) $(id).value = ''; });
-    ['fUf', 'fMunicipio', 'fFornecedor', 'fTipo', 'fMesmoMunicipio',
-     'fGravidade'].forEach((id) => ($(id).value = ''));
+    ['fEncaminhado', 'fMaeFilho', 'fUf', 'fMunicipio', 'fFornecedor', 'fTipo',
+     'fMesmoMunicipio', 'fGravidade'].forEach((id) => {
+        const el = $(id);
+        if (el) el.value = '';
+    });
     $('fModoTexto').value = 'nao_contem';
     $('fFp').value = 'ocultar';
     $('fMinImagens').value = '0';
