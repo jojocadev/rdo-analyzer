@@ -71,7 +71,7 @@ _estado = {"checado_em": 0, "ok": False, "motivo": ""}
 
 def disponivel(forcar=False):
     agora = time.time()
-    if not forcar and agora - _estado["checado_em"] < 30:
+    if not forcar and agora - _estado["checado_em"] < 120:
         return _estado["ok"]
     _estado["checado_em"] = agora
     try:

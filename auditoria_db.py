@@ -91,7 +91,7 @@ TABELAS_BACKEND = "tabelas"
 STORAGE_BACKEND = "storage"
 
 _estado = {"checado_em": 0, "ok": False, "motivo": "", "backend": ""}
-_VALIDADE_CHECAGEM = 30  # segundos
+_VALIDADE_CHECAGEM = 120  # segundos
 
 
 def _tabelas_existem():

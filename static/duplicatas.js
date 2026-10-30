@@ -565,7 +565,7 @@ function celThumbs(p) {
     const resto = imgs.length - mostra.length;
 
     return `<div class="thumbs">` + mostra.map((im, i) => `
-        <img src="/extracted_images/${encodeURIComponent(im.thumb_a)}" loading="lazy"
+        <img src="/extracted_images/${encodeURIComponent(im.thumb_a)}?mini=1" loading="lazy"
              class="${im.evidencia === false ? 'nao-evidencia' : ''}"
              alt="Imagem duplicada ${i + 1}"
              title="${im.classe_rotulo || im.tipo} · ${im.tipo} · ${im.largura}×${im.altura} · pág. ${im.pagina_a} / ${im.pagina_b}"

@@ -117,8 +117,77 @@ def _ocr_estado():
     except Exception as e:
         return False, f"{type(e).__name__}: {e}"
 
+DIR_MINI = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "extracted_images", ".mini")
+
+# 58x44 na tela; 160 px de largura cobre telas de alta densidade com folga.
+LARGURA_MINI = 160
+
+
+def _miniatura_pequena(filename):
+    """
+    Versao reduzida da miniatura, gerada uma vez e guardada ao lado.
+
+    Devolve None quando a imagem de origem nao existe nem em disco nem no
+    Storage — quem chama cai no caminho normal, que trata o 404.
+    """
+    destino = os.path.join(DIR_MINI, filename)
+    if os.path.exists(destino):
+        try:
+            with open(destino, "rb") as fh:
+                return fh.read()
+        except Exception:
+            pass
+
+    origem = os.path.join(CACHE_DIR, filename)
+    bruto = None
+    if os.path.exists(origem):
+        try:
+            with open(origem, "rb") as fh:
+                bruto = fh.read()
+        except Exception:
+            bruto = None
+    if bruto is None:
+        import execucoes_db
+        bruto = execucoes_db.baixar_miniatura(filename)
+    if not bruto:
+        return None
+
+    try:
+        import io as _io
+        from PIL import Image
+        with Image.open(_io.BytesIO(bruto)) as im:
+            im = im.convert("RGB")
+            if im.width > LARGURA_MINI:
+                altura = max(1, round(im.height * LARGURA_MINI / im.width))
+                im = im.resize((LARGURA_MINI, altura), Image.LANCZOS)
+            saida = _io.BytesIO()
+            im.save(saida, "JPEG", quality=72, optimize=True)
+            dados = saida.getvalue()
+    except Exception:
+        return None
+
+    try:
+        os.makedirs(DIR_MINI, exist_ok=True)
+        with open(destino, "wb") as fh:
+            fh.write(dados)
+    except Exception:
+        pass        # sem cache so refaz na proxima; nao e motivo de erro
+    return dados
+
+
 @app.route("/extracted_images/<path:filename>")
 def serve_thumb(filename):
+    # A tabela desenha a imagem em 58x44 px, mas o arquivo tem ~720x960 e
+    # ~100 KB. Com 25 linhas x 2 imagens, eram 5 MB por pagina para preencher
+    # quadradinhos — e era isso que deixava o painel lento. Com ?mini=1 vai uma
+    # versao reduzida, de uns 5 KB; o lightbox continua pedindo a inteira.
+    if request.args.get("mini"):
+        mini = _miniatura_pequena(filename)
+        if mini:
+            return app.response_class(mini, mimetype="image/jpeg",
+                                      headers={"Cache-Control": "public, max-age=604800"})
+
     file_path = os.path.join(CACHE_DIR, filename)
     if os.path.exists(file_path):
         return send_from_directory(CACHE_DIR, filename)
@@ -1491,6 +1560,29 @@ def download_report():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+def _manter_estado_quente():
+    """
+    Mantem em cache o estado dos espelhos no Supabase.
+
+    /api/health conferia as sete tabelas na hora, o que levava segundos e e
+    justamente a rota que a sonda do EasyPanel chama. Sonda lenta vira container
+    reiniciado. Aqui a verificacao roda de fundo e a rota so le o resultado.
+    """
+    def tarefa():
+        import auditoria_db
+        import execucoes_db
+        import marcacoes
+        while True:
+            for modulo in (auditoria_db, execucoes_db, marcacoes):
+                try:
+                    modulo.disponivel(forcar=True)
+                except Exception:
+                    pass
+            time.sleep(60)
+
+    threading.Thread(target=tarefa, daemon=True).start()
+
+
 def _sincronizar_historico_na_subida():
     """
     Sobe ao banco, uma vez por subida, as execucoes que so existem no disco.
@@ -1518,6 +1610,7 @@ def _sincronizar_historico_na_subida():
 # Fora do __main__ de proposito: com gunicorn na VPS o __main__ nunca roda, e e
 # justamente la que a sincronizacao precisa acontecer.
 _sincronizar_historico_na_subida()
+_manter_estado_quente()
 
 
 if __name__ == "__main__":
